@@ -10,9 +10,11 @@ dist/
 dist/**
 out/
 out/**
+*.vsix
 
 # Logs and output files
 *.log
+trace.log
 
 # IDE
 .vscode/
@@ -47,3 +49,6 @@ verify_*.js
 # Coverage reports
 coverage/
 .nyc_output/
+
+# Code duplication reports
+jscpd-report/

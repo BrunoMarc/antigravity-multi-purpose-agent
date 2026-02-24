@@ -5,6 +5,22 @@
  * @module analytics/reporters/session
  */
 
+// Browser-safe import: this file is injected into browser via CDP where require() is not available
+var calculateTimeSaved;
+if (typeof require === 'function') {
+    try {
+        calculateTimeSaved = require('./roi').calculateTimeSaved;
+    } catch { /* browser context */ }
+}
+// Inline fallback for browser context
+if (typeof calculateTimeSaved !== 'function') {
+    calculateTimeSaved = function(clicks) {
+        if (clicks <= 0) return null;
+        var baseSecs = clicks * 5;
+        return { min: Math.max(1, Math.floor((baseSecs * 0.8) / 60)), max: Math.ceil((baseSecs * 1.2) / 60) };
+    };
+}
+
 /**
  * Get a summary of the current session.
  * Includes detailed breakdown of file edits vs terminal commands.
@@ -18,17 +34,15 @@ function getSessionSummary(stats) {
     const terminalCommands = stats.terminalCommandsThisSession || 0;
     const blocked = stats.blockedThisSession || 0;
 
-    // Calculate time saved estimate
-    const baseSecs = clicks * 5;
-    const minMins = Math.max(1, Math.floor((baseSecs * 0.8) / 60));
-    const maxMins = Math.ceil((baseSecs * 1.2) / 60);
+    // Calculate time saved estimate using shared calculation from ROI reporter
+    const timeRange = calculateTimeSaved(clicks);
 
     return {
         clicks,
         fileEdits,
         terminalCommands,
         blocked,
-        estimatedTimeSaved: clicks > 0 ? `${minMins}–${maxMins}` : null,
+        estimatedTimeSaved: timeRange ? `${timeRange.min}–${timeRange.max}` : null,
         hasActivity: clicks > 0 || blocked > 0
     };
 }
@@ -61,4 +75,9 @@ function hasSignificantActivity(stats, threshold = 3) {
 // Export for browser (IIFE) or Node.js (testing)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { getSessionSummary, resetSessionBreakdown, hasSignificantActivity };
+} else if (typeof window !== 'undefined') {
+    // Expose for browser injection
+    window.getSessionSummary = getSessionSummary;
+    window.resetSessionBreakdown = resetSessionBreakdown;
+    window.hasSignificantActivity = hasSignificantActivity;
 }

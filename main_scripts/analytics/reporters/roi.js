@@ -5,6 +5,17 @@
  * @module analytics/reporters/roi
  */
 
+// Browser-safe import: this file is injected into browser via CDP where require() is not available
+var SECONDS_PER_CLICK = 5;
+var TIME_VARIANCE = 0.2;
+if (typeof require === 'function') {
+    try {
+        var _constants = require('../../constants');
+        SECONDS_PER_CLICK = _constants.SECONDS_PER_CLICK;
+        TIME_VARIANCE = _constants.TIME_VARIANCE;
+    } catch { /* browser context — use defaults */ }
+}
+
 /**
  * Get current ROI stats without resetting.
  * Used for display purposes.
@@ -47,12 +58,6 @@ function collectAndResetROI(stats, log) {
 }
 
 /**
- * Constants for time saved calculations.
- */
-const SECONDS_PER_CLICK = 5;
-const TIME_VARIANCE = 0.2; // +/- 20%
-
-/**
  * Calculate estimated time saved from clicks.
  * 
  * @param {number} clicks - Number of clicks
@@ -83,4 +88,9 @@ function formatTimeSaved(clicks) {
 // Export for browser (IIFE) or Node.js (testing)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { getROIStats, collectAndResetROI, calculateTimeSaved, formatTimeSaved, SECONDS_PER_CLICK };
+} else if (typeof window !== 'undefined') {
+    window.getROIStats = getROIStats;
+    window.collectAndResetROI = collectAndResetROI;
+    window.calculateTimeSaved = calculateTimeSaved;
+    window.formatTimeSaved = formatTimeSaved;
 }

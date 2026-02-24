@@ -91,6 +91,10 @@ async function runTest() {
             queueMode: 'consume'
         });
 
+        // Ensure prior queue run isn't active and respect queue start dampener
+        await sendCommand('stopQueue');
+        await new Promise(r => setTimeout(r, 2200));
+
         // 2. (Removed clearLogs to debug logging persistence)
         // await sendCommand('clearLogs');
 
@@ -102,15 +106,24 @@ async function runTest() {
             process.exit(1);
         }
 
-        // 4. Wait for async execution (3s)
-        console.log('Waiting 3s for processing...');
-        await new Promise(r => setTimeout(r, 3000));
+        // 4. Wait for async execution and poll history for up to 8s
+        console.log('Waiting for history update (up to 8s)...');
+
+        let found = null;
+        for (let i = 0; i < 8; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            const historyRes = await sendCommand('getPromptHistory');
+            if (historyRes.success) {
+                const history = historyRes.history || [];
+                found = history.find(h => h.text && h.text.includes(testPrompt));
+                if (found) break;
+            }
+        }
 
         // 5. Verify Prompt History (Reliable state check)
         const historyRes = await sendCommand('getPromptHistory');
         if (historyRes.success) {
             const history = historyRes.history || [];
-            const found = history.find(h => h.text && h.text.includes(testPrompt));
 
             if (found) {
                 console.log('PASS: History verification - Scheduler successfully processed prompt');

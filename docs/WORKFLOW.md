@@ -8,12 +8,12 @@ This document describes how the Multi Purpose Agent VS Code extension works end-
 
 **Primary components**
 
-- **Extension Host (Node.js)**: [extension-impl.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/extension-impl.js)
-- **CDP bridge**: [cdp-handler.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/cdp-handler.js)
-- **Browser payload**: [full_cdp_script.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/full_cdp_script.js)
-- **Settings UI (WebView)**: [settings-panel.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/settings-panel.js)
-- **Debug server (optional)**: [debug-handler.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/debug-handler.js)
-- **Quota client (optional)**: [AntigravityClient](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/antigravity/client.js)
+- **Extension Host (Node.js)**: [main_scripts/extension-impl.js](../main_scripts/extension-impl.js)
+- **CDP bridge**: [main_scripts/cdp-handler.js](../main_scripts/cdp-handler.js)
+- **Browser payload**: [main_scripts/full_cdp_script.js](../main_scripts/full_cdp_script.js)
+- **Settings UI (WebView)**: [main_scripts/settings-panel.js](../main_scripts/settings-panel.js)
+- **Debug server (optional)**: [main_scripts/debug-handler.js](../main_scripts/debug-handler.js)
+- **Quota client (optional)**: [main_scripts/antigravity/client.js](../main_scripts/antigravity/client.js)
 
 **Data flow (typical)**
 
@@ -35,7 +35,7 @@ This document describes how the Multi Purpose Agent VS Code extension works end-
 **Injection sequence**
 
 1. For each target, connect to its `webSocketDebuggerUrl`.
-2. Inject [full_cdp_script.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/full_cdp_script.js) once per target.
+2. Inject [main_scripts/full_cdp_script.js](../main_scripts/full_cdp_script.js) once per target.
 3. Call `window.__autoAcceptStart(config)` on that target to start the browser-side loop.
 
 ---
@@ -140,19 +140,29 @@ The browser payload runs inside a live page context. A syntax error in the paylo
 Practical workflow:
 
 1. Use the live debug tooling to execute and iterate on DOM selectors and helper logic against a real Antigravity tab.
-2. Apply changes to [full_cdp_script.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/full_cdp_script.js).
+2. Apply changes to [main_scripts/full_cdp_script.js](../main_scripts/full_cdp_script.js).
 3. Reload the VS Code extension host to re-inject the payload into targets.
 
 ### Adding or changing settings
 
 Settings changes usually touch four layers:
 
-1. [package.json](file:///c:/Users/rulfe/GitHub/auto-accept-agent/package.json) schema (`contributes.configuration`)
-2. [settings-panel.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/settings-panel.js) UI + message handlers
-3. [extension-impl.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/extension-impl.js) config reads/writes and behavior wiring
-4. [cdp-handler.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/cdp-handler.js) when behavior affects browser payload config or evaluation
+1. [package.json](../package.json) schema (`contributes.configuration`)
+2. [main_scripts/settings-panel.js](../main_scripts/settings-panel.js) UI + message handlers
+3. [main_scripts/extension-impl.js](../main_scripts/extension-impl.js) config reads/writes and behavior wiring
+4. [main_scripts/cdp-handler.js](../main_scripts/cdp-handler.js) when behavior affects browser payload config or evaluation
 
 ### Relauncher safety
 
-The Relauncher modifies OS-level launch shortcuts to ensure Antigravity is started with `--remote-debugging-port=9004`. Treat changes to [relauncher.js](file:///c:/Users/rulfe/GitHub/auto-accept-agent/main_scripts/relauncher.js) as high-impact and validate on each platform you touch.
+The Relauncher modifies OS-level launch shortcuts to ensure Antigravity is started with `--remote-debugging-port=9004`. Treat changes to [main_scripts/relauncher.js](../main_scripts/relauncher.js) as high-impact and validate on each platform you touch.
+
+---
+
+## 9. Antigravity-only Backlog Candidates
+
+The repository intentionally remains Antigravity-specific. The following are candidate enhancements derived from prior cross-repo research and should be implemented only with Antigravity naming and behavior:
+
+- Continue-banner auto-click support for interrupted long-running generations.
+- DOM mutation-assisted activity tracking to improve queue silence detection fidelity.
+- Expanded debug endpoint ergonomics (error codes/request IDs) while preserving current command surface.
 

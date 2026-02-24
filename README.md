@@ -64,7 +64,7 @@ For those who want to see how the magic happens:
 *   **[Architecture Deep Dive](docs/WORKFLOW.md)**: Understanding the workflow.
 *   **[Messaging Protocol](docs/SEND_MESSAGE_ANTIGRAVITY_TO_AGENT_CHAT.md)**: How we speak to the webview via CDP.
 *   **[Live Debugging](docs/LIVE_CDP_DEBUGGING.md)**: Inject JavaScript directly into the agent.
-*   **[Test Suite](docs/DEBUG_TESTING.md)**: Run the 52+ automated tests.
+*   **[Test Suite](docs/DEBUG_TESTING.md)**: Run the full automated test suite.
 
 ---
 
@@ -76,6 +76,8 @@ For those who want to see how the magic happens:
 | **Silence Timeout** | `auto-accept.schedule.silenceTimeout` | Seconds to wait before assuming a task is done |
 | **Quota Poll** | `auto-accept.antigravityQuota.pollInterval` | How often to refresh credit status |
 | **CDP Port** | `auto-accept.cdpPort` | Defaults to `9004`. Must match launch args. |
+
+Debug server default: `http://127.0.0.1:54123` (selected to avoid Windows reserved port ranges that can block `54321`).
 
 ---
 

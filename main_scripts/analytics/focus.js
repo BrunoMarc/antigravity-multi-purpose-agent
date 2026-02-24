@@ -89,4 +89,10 @@ function resetListenerState() {
 // Export for browser (IIFE) or Node.js (testing)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { setupFocusListeners, dispatchUserReturnedEvent, areListenersAttached, resetListenerState };
+} else if (typeof window !== 'undefined') {
+    // Expose for browser injection
+    window.setupFocusListeners = setupFocusListeners;
+    window.dispatchUserReturnedEvent = dispatchUserReturnedEvent;
+    window.areListenersAttached = areListenersAttached;
+    window.resetListenerState = resetListenerState;
 }

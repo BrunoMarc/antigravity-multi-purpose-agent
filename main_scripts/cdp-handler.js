@@ -2,32 +2,44 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { DEFAULT_CDP_PORT, CDP_AVAILABILITY_ATTEMPTS, CDP_AVAILABILITY_RETRY_MS } = require('./constants');
+const { BaseLogger } = require('./base-logger');
 
-const DEFAULT_CDP_PORT = 9004;
-
-class CDPHandler {
+class CDPHandler extends BaseLogger {
     constructor(logger = console.log, port = DEFAULT_CDP_PORT) {
-        this.logger = logger;
+        super(logger, 'CDP');
         this.port = port;
         this.connections = new Map(); // port:pageId -> {ws, injected}
         this.isEnabled = false;
         this.msgId = 1;
-    }
-
-    log(msg) {
-        this.logger(`[CDP] ${msg}`);
+        this.bundleVersion = null;
+        this.lastSendConnectionId = null; // Track which connection was used for sending
     }
 
     /**
      * Check if the configured CDP port is active
      */
     async isCDPAvailable() {
+        // Fast path: start() already established connections
+        if (this.connections.size > 0) return true;
+
         try {
-            const pages = await this._getPages(this.port);
-            return pages.length > 0;
+            for (let attempt = 1; attempt <= CDP_AVAILABILITY_ATTEMPTS; attempt++) {
+                const pages = await this._getPages(this.port);
+                if (pages.length > 0) return true;
+
+                if (attempt < CDP_AVAILABILITY_ATTEMPTS) {
+                    await this._wait(CDP_AVAILABILITY_RETRY_MS);
+                }
+            }
+            return false;
         } catch (e) {
             return false;
         }
+    }
+
+    async _wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
     /**
@@ -37,9 +49,9 @@ class CDPHandler {
         this.isEnabled = true;
         if (config.port) this.port = config.port;
         this.workspaceName = config.workspaceName || null; // Store for later use in sendPrompt
-        this.log(`Connecting to CDP on port ${this.port}...`);
+        this._log(`Connecting to CDP on port ${this.port}...`);
         if (this.workspaceName) {
-            this.log(`Current workspace: ${this.workspaceName}`);
+            this._log(`Current workspace: ${this.workspaceName}`);
         }
 
         try {
@@ -70,8 +82,8 @@ class CDPHandler {
     }
 
     async _getPages(port) {
-        return new Promise((resolve, reject) => {
-            const req = http.get({ hostname: '127.0.0.1', port, path: '/json/list', timeout: 500 }, (res) => {
+        return new Promise((resolve) => {
+            const req = http.get({ hostname: '127.0.0.1', port, path: '/json/list', timeout: 2000 }, (res) => {
                 let body = '';
                 res.on('data', chunk => body += chunk);
                 res.on('end', () => {
@@ -80,11 +92,18 @@ class CDPHandler {
                         // Filter for debuggable pages with WebSocket
                         const filtered = pages.filter(p => {
                             if (!p.webSocketDebuggerUrl) return false;
-                            if (p.type !== 'page' && p.type !== 'webview' && p.type !== 'iframe') return false;
-                            // Exclude our Settings Panel webview
-                            if (p.title && p.title.includes('Multi Purpose Agent Settings')) return false;
+                            // Accept any page/webview/iframe — cast a wide net
+                            // to ensure we don't miss the chat webview
+                            if (p.type === 'service_worker' || p.type === 'background_page') return false;
+                            // Filter out worker targets with no title/URL (internal threads that cause CDP timeouts)
+                            if (p.type === 'worker' && !p.title && !p.url) return false;
+                            // Exclude our own extension's webviews (Settings Panel) — their URL contains our extensionId
+                            const url = (p.url || '').toLowerCase();
+                            const title = (p.title || '').toLowerCase();
+                            if (url.includes('extensionid=rodhayl.multi-purpose-agent') || title.includes('extensionid=rodhayl.multi-purpose-agent')) return false;
                             return true;
                         });
+                        this._log(`_getPages: ${pages.length} total, ${filtered.length} after filter (types: ${filtered.map(p => `${p.type}:"${(p.title||'').substring(0,30)}"`).join(', ')})`);
                         resolve(filtered);
                     } catch (e) { resolve([]); }
                 });
@@ -99,15 +118,39 @@ class CDPHandler {
             const ws = new WebSocket(url);
             ws.on('open', () => {
                 this.connections.set(id, { ws, injected: false });
-                this.log(`Connected to page ${id}`);
+                this._log(`Connected to page ${id}`);
                 resolve(true);
             });
             ws.on('error', () => resolve(false));
             ws.on('close', () => {
                 this.connections.delete(id);
-                this.log(`Disconnected from page ${id}`);
+                this._log(`Disconnected from page ${id}`);
             });
         });
+    }
+
+    /**
+     * Build and cache the concatenated sub-module bundle (utils + analytics).
+     * File reads happen once; subsequent calls return the cached string.
+     */
+    _getSubModuleBundle() {
+        if (this._subModuleBundle) return this._subModuleBundle;
+
+        const base = path.join(__dirname, '..', 'main_scripts');
+        const files = [
+            path.join(base, 'utils.js'),
+            path.join(base, 'analytics', 'state.js'),
+            path.join(base, 'analytics', 'trackers', 'clicks.js'),
+            path.join(base, 'analytics', 'trackers', 'away.js'),
+            path.join(base, 'analytics', 'reporters', 'roi.js'),
+            path.join(base, 'analytics', 'reporters', 'session.js'),
+            path.join(base, 'analytics', 'focus.js'),
+            path.join(base, 'analytics', 'index.js'),
+        ];
+
+        // Concatenate all sub-modules into one script (dependency order)
+        this._subModuleBundle = files.map(f => fs.readFileSync(f, 'utf8')).join(';\n');
+        return this._subModuleBundle;
     }
 
     async _inject(id, config) {
@@ -115,18 +158,33 @@ class CDPHandler {
         if (!conn) return;
 
         try {
-            if (!conn.injected) {
-                const scriptPath = path.join(__dirname, '..', 'main_scripts', 'full_cdp_script.js');
+            // Inject all sub-modules in a single CDP evaluation (utils + analytics)
+            const subModuleBundle = this._getSubModuleBundle();
+            await this._evaluate(id, subModuleBundle, 15000);
+
+            // Then inject the main script (with version check to skip if unchanged)
+            const scriptPath = path.join(__dirname, '..', 'main_scripts', 'full_cdp_script.js');
+            const stat = fs.statSync(scriptPath);
+            const runtimeBundleVersion = String(Math.floor(stat.mtimeMs));
+            this.bundleVersion = runtimeBundleVersion;
+
+            let currentBundleVersion = '';
+            try {
+                const currentVersionRes = await this._evaluate(id, '(function(){ return window.__autoAcceptBundleVersion || ""; })()');
+                currentBundleVersion = currentVersionRes?.result?.value || '';
+            } catch (e) { }
+
+            if (!conn.injected || currentBundleVersion !== this.bundleVersion) {
                 const script = fs.readFileSync(scriptPath, 'utf8');
-                // Initial injection can take longer due to the size of the script.
                 await this._evaluate(id, script, 15000);
+                await this._evaluate(id, `window.__autoAcceptBundleVersion = ${JSON.stringify(this.bundleVersion)}`);
                 conn.injected = true;
-                this.log(`Script injected into ${id}`);
+                this._log(`Script injected into ${id} (bundle ${this.bundleVersion})`);
             }
 
             await this._evaluate(id, `if(window.__autoAcceptStart) window.__autoAcceptStart(${JSON.stringify(config)})`);
         } catch (e) {
-            this.log(`Injection failed for ${id}: ${e.message}`);
+            this._logError(`Injection failed for ${id}: ${e.message}`);
         }
     }
 
@@ -157,15 +215,26 @@ class CDPHandler {
     }
 
     /**
-     * Public evaluate method for debug purposes.
-     * Evaluates expression on ALL connections and returns the first successful result.
+     * Public evaluate method.
+     * Evaluates expression on ALL connections and returns the first truthy result.
+     * For auto-accept scripts that return JSON with {clicked:true/false}, this
+     * ensures a successful click on connection A isn't overwritten by {clicked:false}
+     * from connection B.
      */
     async evaluate(expression) {
         let lastResult = null;
         for (const [id] of this.connections) {
             try {
                 const res = await this._evaluate(id, expression);
-                if (res) lastResult = res.result?.value;
+                const value = res?.result?.value;
+                if (value != null) {
+                    lastResult = value;
+                    // Short-circuit: if result looks like a JSON with clicked:true, return immediately
+                    try {
+                        const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+                        if (parsed && parsed.clicked === true) return value;
+                    } catch (_) { /* not JSON, continue */ }
+                }
             } catch (e) { }
         }
         return lastResult;
@@ -199,138 +268,69 @@ class CDPHandler {
 
     getConnectionCount() { return this.connections.size; }
 
+    async probeForSendCapability() {
+        for (const [id] of this.connections) {
+            try {
+                const res = await this._evaluate(id, '!!(window.__autoAcceptSendPrompt || window.__autoAcceptSendPromptToConversation)');
+                if (res?.result?.value === true) return true;
+            } catch (e) { /* ignore */ }
+        }
+        return false;
+    }
+
+    async isConversationBusy(targetConversation = '') {
+        if (this.connections.size === 0) return false;
+
+        for (const [id, conn] of this.connections) {
+            try {
+                if (targetConversation) {
+                    const title = (conn?.pageTitle || '').toLowerCase();
+                    if (!title.includes(String(targetConversation).toLowerCase())) {
+                        continue;
+                    }
+                }
+
+                const res = await this._evaluate(id, `(function(){
+                    try {
+                        if (typeof window !== "undefined" && window.__autoAcceptIsConversationWorking) {
+                            return !!window.__autoAcceptIsConversationWorking();
+                        }
+                        return false;
+                    } catch (e) {
+                        return false;
+                    }
+                })()`);
+
+                if (res?.result?.value === true) {
+                    this._log(`isConversationBusy: ${id} reports busy`);
+                    return true;
+                }
+            } catch (e) {
+                // Ignore per-connection errors and continue probing others
+            }
+        }
+
+        return false;
+    }
+
     async sendPrompt(text, targetConversation = '') {
         if (!text) return 0;
 
         const connCount = this.connections.size;
         if (connCount === 0) {
-            this.log(`ERROR: No CDP connections available! Cannot send prompt.`);
+            this._logError(`No CDP connections available! Cannot send prompt.`);
             return 0;
         }
 
-        this.log(`Sending prompt to ${connCount} connection(s)${targetConversation ? ` (target: "${targetConversation}")` : ''}: "${text.substring(0, 50)}..."`);
+        this._log(`Sending prompt to ${connCount} connection(s)${targetConversation ? ` (target: "${targetConversation}")` : ''}: "${text.substring(0, 50)}..."`);
 
         // Use the newest prompt-sending implementation (probe + verification).
-        // Keep legacy logic below for backwards compatibility, but short-circuit to avoid false positives.
         try {
             return await this._sendPromptV2(text, targetConversation);
         } catch (e) {
-            this.log(`Prompt send (v2) failed: ${e?.message || String(e)}`);
+            this._logError(`Prompt send (v2) failed: ${e?.message || String(e)}`);
             return 0;
         }
-
-        // First, find which connection has the chat input (probe)
-        const connectionResults = [];
-        for (const [id] of this.connections) {
-            try {
-                const hasInput = await this._evaluate(id, `(function(){ 
-                    // Check if we have contenteditable chat input
-                    const editables = document.querySelectorAll('[contenteditable="true"]');
-                    const nonIme = Array.from(editables).filter(e => !(e.className || '').includes('ime'));
-                    if (nonIme.length > 0) {
-                        // Found potential chat input
-                        return JSON.stringify({
-                            hasInput: true,
-                            count: nonIme.length,
-                            width: nonIme[0].getBoundingClientRect().width
-                        });
-                    }
-                    return JSON.stringify({ hasInput: false });
-                })()`);
-
-                const parsed = typeof hasInput.result?.value === 'string'
-                    ? JSON.parse(hasInput.result.value)
-                    : { hasInput: false };
-
-                connectionResults.push({ id, hasInput: parsed.hasInput, details: parsed });
-
-                if (parsed.hasInput) {
-                    this.log(`✓ Connection ${id} has chat input (count: ${parsed.count}, width: ${parsed.width})`);
-                } else {
-                    this.log(`✗ Connection ${id} has no chat input`);
-                }
-            } catch (e) {
-                this.log(`Failed to check ${id}: ${e.message}`);
-                connectionResults.push({ id, hasInput: false, error: e.message });
-            }
-        }
-
-        // Send to connections that have input, or all if none found
-        let targetsWithInput = connectionResults.filter(r => r.hasInput);
-
-        // If workspace preference set, filter targets to matching workspace
-        if (this.workspaceName && targetsWithInput.length > 1) {
-            const workspaceMatches = targetsWithInput.filter(r => {
-                const conn = this.connections.get(r.id);
-                const title = conn?.pageTitle || '';
-                return title.toLowerCase().includes(this.workspaceName.toLowerCase());
-            });
-
-            if (workspaceMatches.length > 0) {
-                this.log(`✓ Found ${workspaceMatches.length} connection(s) matching workspace "${this.workspaceName}"`);
-                targetsWithInput = workspaceMatches;
-            } else {
-                this.log(`⚠️  No connections match workspace "${this.workspaceName}", using all ${targetsWithInput.length} with chat input`);
-            }
-        }
-
-        const targets = targetsWithInput.length > 0 ? targetsWithInput : connectionResults;
-
-        if (targetsWithInput.length === 0) {
-            this.log(`⚠️  WARNING: No connection has visible chat input! Trying all connections anyway...`);
-        } else {
-            this.log(`✓ Found ${targetsWithInput.length} connection(s) with chat input`);
-        }
-
-        let successCount = 0;
-        for (const { id } of targets) {
-            try {
-                const result = await this._evaluate(id, `(async function(){ 
-                    const out = { ok: false, method: null, error: null };
-                    try {
-                        if(typeof window !== "undefined" && window.__autoAcceptSendPromptToConversation) {
-                            const ok = await window.__autoAcceptSendPromptToConversation(${JSON.stringify(text)}, ${JSON.stringify(targetConversation)});
-                            out.ok = !!ok;
-                            out.method = 'sendPromptToConversation';
-                            if(!out.ok) out.error = 'sendPromptToConversation returned falsy';
-                            return JSON.stringify(out);
-                        }
-                        if(typeof window !== "undefined" && window.__autoAcceptSendPrompt) {
-                            const ok = window.__autoAcceptSendPrompt(${JSON.stringify(text)});
-                            out.ok = !!ok;
-                            out.method = 'sendPrompt';
-                            if(!out.ok) out.error = 'sendPrompt returned falsy';
-                            return JSON.stringify(out);
-                        }
-                        out.error = 'no send functions found';
-                        return JSON.stringify(out);
-                    } catch (e) {
-                        out.error = (e && e.message) ? e.message : String(e);
-                        return JSON.stringify(out);
-                    }
-                })()`);
-
-                const raw = result?.result?.value;
-                let parsed = null;
-                if (typeof raw === 'string') {
-                    try { parsed = JSON.parse(raw); } catch (e) { }
-                }
-
-                if (parsed?.ok) {
-                    successCount++;
-                    this.log(`✓ Prompt sent to ${id} via ${parsed.method}`);
-                } else if (parsed) {
-                    this.log(`✗ Prompt NOT sent to ${id} via ${parsed.method || 'unknown'}: ${parsed.error || 'unknown error'}`);
-                } else {
-                    this.log(`✗ Prompt result for ${id}: ${raw || 'no result'}`);
-                }
-            } catch (e) {
-                this.log(`Failed to send prompt to ${id}: ${e.message}`);
-            }
-        }
-
-        this.log(`Prompt send complete: ${successCount}/${targets.length} successful`);
-        return successCount;
     }
 
     async _sendPromptV2(text, targetConversation = '') {
@@ -339,10 +339,24 @@ class CDPHandler {
         const connCount = this.connections.size;
         if (connCount === 0) return 0;
 
+        this._log(`Prompt send (v2): Probing ${connCount} connection(s)...`);
+
         // Probe each connection for the best prompt input target
         const connectionResults = [];
-        for (const [id] of this.connections) {
+        for (const [id, conn] of this.connections) {
             try {
+                const pageTitle = conn?.pageTitle || '';
+                const pageUrl = conn?.pageUrl || '';
+
+                // Skip our own extension's webviews (Settings Panel) — never send prompts there
+                if (pageUrl.toLowerCase().includes('extensionid=rodhayl.multi-purpose-agent') ||
+                    pageTitle.toLowerCase().includes('extensionid=rodhayl.multi-purpose-agent')) {
+                    this._log(`Prompt send (v2): Skipping own extension webview ${id}`);
+                    continue;
+                }
+
+                this._log(`Prompt send (v2): Probing ${id} (title="${pageTitle.substring(0, 60)}", url="${pageUrl.substring(0, 80)}")`);
+
                 const probeRes = await this._evaluate(id, `(function(){
                     try {
                         if (typeof window !== "undefined" && window.__autoAcceptProbePrompt) {
@@ -352,7 +366,7 @@ class CDPHandler {
                         const editables = document.querySelectorAll('[contenteditable="true"]');
                         const textareas = document.querySelectorAll('textarea');
                         const any = (editables && editables.length > 0) || (textareas && textareas.length > 0);
-                        return JSON.stringify({ hasInput: !!any, score: any ? 1 : 0 });
+                        return JSON.stringify({ hasInput: !!any, score: any ? 1 : 0, fallback: true, editableCount: editables.length, textareaCount: textareas.length });
                     } catch (e) {
                         return JSON.stringify({ hasInput: false, score: 0, error: (e && e.message) ? e.message : String(e) });
                     }
@@ -362,6 +376,8 @@ class CDPHandler {
                     ? JSON.parse(probeRes.result.value)
                     : { hasInput: false, score: 0 };
 
+                this._log(`Prompt send (v2): Probe result for ${id}: hasInput=${parsed.hasInput}, score=${parsed.score}, hasAgentPanel=${parsed.hasAgentPanel}, hint="${parsed.hint || ''}", error=${parsed.error || 'none'}`);
+
                 connectionResults.push({
                     id,
                     hasInput: !!parsed.hasInput,
@@ -369,6 +385,7 @@ class CDPHandler {
                     details: parsed
                 });
             } catch (e) {
+                this._logError(`Prompt send (v2): Probe error for ${id}: ${e.message}`);
                 connectionResults.push({ id, hasInput: false, score: 0, error: e.message });
             }
         }
@@ -394,7 +411,7 @@ class CDPHandler {
         }
 
         if (targetsWithInput.length === 0) {
-            this.log('Prompt send (v2): No connection reports a prompt input.');
+            this._log(`Prompt send (v2): No connection reports a prompt input (total probed: ${connectionResults.length}). Results: ${connectionResults.map(r => `${r.id}:hasInput=${r.hasInput},score=${r.score},err=${r.error || 'none'}`).join('; ')}`);
             return 0;
         }
 
@@ -404,52 +421,122 @@ class CDPHandler {
             if (aPanel !== bPanel) return bPanel - aPanel;
             return (b.score || 0) - (a.score || 0);
         });
-        const target = targetsWithInput[0];
-        this.log(`Prompt send (v2): Using ${target.id} (score: ${target.score || 0})`);
 
-        try {
-            const result = await this._evaluate(target.id, `(async function(){
-                const out = { ok: false, method: null, error: null };
-                try {
-                    if(typeof window !== "undefined" && window.__autoAcceptSendPromptToConversation) {
-                        const ok = await window.__autoAcceptSendPromptToConversation(${JSON.stringify(text)}, ${JSON.stringify(targetConversation)});
-                        out.ok = !!ok;
-                        out.method = 'sendPromptToConversation';
-                        if(!out.ok) out.error = 'sendPromptToConversation returned falsy';
+        for (const target of targetsWithInput) {
+            this._log(`Prompt send (v2): Using ${target.id} (score: ${target.score || 0})`);
+
+            try {
+                const result = await this._evaluate(target.id, `(async function(){
+                    const out = { ok: false, method: null, error: null };
+                    try {
+                        if(typeof window !== "undefined" && window.__autoAcceptSendPromptToConversation) {
+                            const okConv = await window.__autoAcceptSendPromptToConversation(${JSON.stringify(text)}, ${JSON.stringify(targetConversation)});
+                            if (okConv) {
+                                out.ok = true;
+                                out.method = 'sendPromptToConversation';
+                                return JSON.stringify(out);
+                            }
+                            out.error = 'sendPromptToConversation returned falsy';
+                        }
+                        if(typeof window !== "undefined" && window.__autoAcceptSendPrompt) {
+                            const ok = await window.__autoAcceptSendPrompt(${JSON.stringify(text)});
+                            out.ok = !!ok;
+                            out.method = 'sendPrompt';
+                            if(!out.ok) out.error = 'sendPrompt returned falsy';
+                            return JSON.stringify(out);
+                        }
+                        out.error = 'no send functions found';
+                        return JSON.stringify(out);
+                    } catch (e) {
+                        out.error = (e && e.message) ? e.message : String(e);
                         return JSON.stringify(out);
                     }
-                    if(typeof window !== "undefined" && window.__autoAcceptSendPrompt) {
-                        const ok = await window.__autoAcceptSendPrompt(${JSON.stringify(text)});
-                        out.ok = !!ok;
-                        out.method = 'sendPrompt';
-                        if(!out.ok) out.error = 'sendPrompt returned falsy';
-                        return JSON.stringify(out);
-                    }
-                    out.error = 'no send functions found';
-                    return JSON.stringify(out);
-                } catch (e) {
-                    out.error = (e && e.message) ? e.message : String(e);
-                    return JSON.stringify(out);
+                })()`, 15000);
+
+                const raw = result?.result?.value;
+                let parsed = null;
+                if (typeof raw === 'string') {
+                    try { parsed = JSON.parse(raw); } catch (e) { }
                 }
-            })()`, 15000);
 
-            const raw = result?.result?.value;
-            let parsed = null;
-            if (typeof raw === 'string') {
-                try { parsed = JSON.parse(raw); } catch (e) { }
+                if (parsed?.ok) {
+                    this._log(`Prompt send (v2): Sent via ${parsed.method}`);
+                    this.lastSendConnectionId = target.id;
+                    return 1;
+                }
+
+                this._log(`Prompt send (v2): NOT sent on ${target.id}: ${parsed?.error || raw || 'unknown error'}`);
+            } catch (e) {
+                this._logError(`Prompt send (v2): Failed to send on ${target.id}: ${e.message}`);
             }
-
-            if (parsed?.ok) {
-                this.log(`Prompt send (v2): Sent via ${parsed.method}`);
-                return 1;
-            }
-
-            this.log(`Prompt send (v2): NOT sent: ${parsed?.error || raw || 'unknown error'}`);
-            return 0;
-        } catch (e) {
-            this.log(`Prompt send (v2): Failed to send: ${e.message}`);
-            return 0;
         }
+
+        this._log('Prompt send (v2): Failed on all candidate connections');
+        return 0;
+    }
+
+    /**
+     * Get a snapshot of the conversation state (text length, message count) from the connection used for sending.
+     * Used to detect when the AI starts/stops responding.
+     */
+    async getConversationSnapshot() {
+        const targetId = this.lastSendConnectionId;
+        if (!targetId || !this.connections.has(targetId)) {
+            // Fallback: try all connections
+            for (const [id] of this.connections) {
+                try {
+                    const res = await this._evaluate(id, `(function(){
+                        try {
+                            if (window.__autoAcceptGetConversationSnapshot) return JSON.stringify(window.__autoAcceptGetConversationSnapshot());
+                            return JSON.stringify({textLength: document.body?.innerText?.length || 0, ts: Date.now()});
+                        } catch(e) { return JSON.stringify({error: e.message}); }
+                    })()`);
+                    if (res?.result?.value) return JSON.parse(res.result.value);
+                } catch (e) { }
+            }
+            return null;
+        }
+        try {
+            const res = await this._evaluate(targetId, `(function(){
+                try {
+                    if (window.__autoAcceptGetConversationSnapshot) return JSON.stringify(window.__autoAcceptGetConversationSnapshot());
+                    return JSON.stringify({textLength: document.body?.innerText?.length || 0, ts: Date.now()});
+                } catch(e) { return JSON.stringify({error: e.message}); }
+            })()`);
+            if (res?.result?.value) return JSON.parse(res.result.value);
+        } catch (e) { }
+        return null;
+    }
+
+    /**
+     * Wait for the AI to start responding after a prompt was sent.
+     * Polls the conversation snapshot until text length increases or busy indicator appears.
+     * @param {number} timeoutMs - Max time to wait (default 15s)
+     * @param {number} intervalMs - Poll interval (default 1s)
+     * @returns {boolean} true if response started, false if timed out
+     */
+    async waitForResponseStart(timeoutMs = 15000, intervalMs = 1000) {
+        const baseline = await this.getConversationSnapshot();
+        if (!baseline) return false;
+        const startTextLen = baseline.textLength || 0;
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            await new Promise(r => setTimeout(r, intervalMs));
+            // Check busy state first (fastest signal)
+            const busy = await this.isConversationBusy();
+            if (busy) {
+                this._log('waitForResponseStart: conversation became busy');
+                return true;
+            }
+            // Check if text grew (AI started outputting)
+            const snap = await this.getConversationSnapshot();
+            if (snap && (snap.textLength || 0) > startTextLen + 10) {
+                this._log(`waitForResponseStart: text grew from ${startTextLen} to ${snap.textLength}`);
+                return true;
+            }
+        }
+        this._log('waitForResponseStart: timed out waiting for response');
+        return false;
     }
 
     async getAwayActions() {
@@ -488,7 +575,7 @@ class CDPHandler {
                     aggregatedStats.blocked += s.blocked || 0;
                 }
             } catch (e) {
-                this.log(`Failed to reset stats for ${id}: ${e.message}`);
+                this._logError(`Failed to reset stats for ${id}: ${e.message}`);
             }
         }
         return aggregatedStats;

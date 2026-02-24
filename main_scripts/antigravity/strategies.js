@@ -7,10 +7,66 @@
 'use strict';
 
 /**
+ * Base Strategy - Contains shared functionality for all platform strategies
+ */
+class BaseStrategy {
+    /**
+     * Shared port parsing logic for all strategies
+     * @param {string} stdout - Command output
+     * @param {RegExp} portRegex - Regular expression to extract ports
+     * @param {function} [customParser] - Optional custom parsing function (for PowerShell JSON output)
+     * @returns {number[]} Sorted array of unique ports
+     */
+    parseListeningPorts(stdout, portRegex, customParser = null) {
+        const ports = [];
+
+        if (customParser) {
+            const customPorts = customParser(stdout);
+            customPorts.forEach(port => {
+                if (!ports.includes(port)) {
+                    ports.push(port);
+                }
+            });
+        }
+
+        let match;
+        while ((match = portRegex.exec(stdout)) !== null) {
+            const port = parseInt(match[1], 10);
+            if (!ports.includes(port)) {
+                ports.push(port);
+            }
+        }
+
+        return ports.sort((a, b) => a - b);
+    }
+
+    /**
+     * Shared extension port parsing from command line
+     * @param {string} commandLine - Process command line
+     * @returns {number} Extension server port or 0 if not found
+     */
+    parseExtensionPort(commandLine) {
+        const portMatch = commandLine.match(/--extension_server_port[=\s]+(\d+)/);
+        return portMatch && portMatch[1] ? parseInt(portMatch[1], 10) : 0;
+    }
+
+    /**
+     * Shared CSRF token parsing from command line
+     * @param {string} commandLine - Process command line
+     * @returns {string} CSRF token or empty string if not found
+     */
+    parseCsrfToken(commandLine) {
+        const tokenMatch = commandLine.match(/--csrf_token[=\s]+([a-zA-Z0-9-]+)/i);
+        return tokenMatch && tokenMatch[1] ? tokenMatch[1] : '';
+    }
+}
+
+/**
  * Windows Strategy - Uses PowerShell/WMIC to find the language_server process
  */
-class WindowsStrategy {
+class WindowsStrategy extends BaseStrategy {
     constructor() {
+        super();
         this.usePowerShell = true;
     }
 
@@ -89,15 +145,12 @@ class WindowsStrategy {
                 }
 
                 // Extract port and token from command line
-                const portMatch = commandLine.match(/--extension_server_port[=\s]+(\d+)/);
-                const tokenMatch = commandLine.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/i);
+                const extensionPort = this.parseExtensionPort(commandLine);
+                const csrfToken = this.parseCsrfToken(commandLine);
 
-                if (!tokenMatch || !tokenMatch[1]) {
+                if (!csrfToken) {
                     return null;
                 }
-
-                const extensionPort = portMatch && portMatch[1] ? parseInt(portMatch[1], 10) : 0;
-                const csrfToken = tokenMatch[1];
 
                 return { pid, extensionPort, csrfToken };
             } catch (e) {
@@ -123,16 +176,14 @@ class WindowsStrategy {
                 continue;
             }
 
-            const portMatch = commandLine.match(/--extension_server_port[=\s]+(\d+)/);
-            const tokenMatch = commandLine.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/i);
+            const extensionPort = this.parseExtensionPort(commandLine);
+            const csrfToken = this.parseCsrfToken(commandLine);
 
-            if (!tokenMatch || !tokenMatch[1]) {
+            if (!csrfToken) {
                 continue;
             }
 
             const pid = parseInt(pidMatch[1], 10);
-            const extensionPort = portMatch && portMatch[1] ? parseInt(portMatch[1], 10) : 0;
-            const csrfToken = tokenMatch[1];
 
             candidates.push({ pid, extensionPort, csrfToken });
         }
@@ -159,46 +210,38 @@ class WindowsStrategy {
      * @returns {number[]}
      */
     parseListeningPorts(stdout, pid) {
-        const ports = [];
-
-        if (this.usePowerShell) {
-            try {
-                const data = JSON.parse(stdout.trim());
-                if (Array.isArray(data)) {
-                    for (const port of data) {
-                        if (typeof port === 'number' && !ports.includes(port)) {
-                            ports.push(port);
+        const customParser = (output) => {
+            const customPorts = [];
+            if (this.usePowerShell) {
+                try {
+                    const data = JSON.parse(output.trim());
+                    if (Array.isArray(data)) {
+                        for (const port of data) {
+                            if (typeof port === 'number') {
+                                customPorts.push(port);
+                            }
                         }
+                    } else if (typeof data === 'number') {
+                        customPorts.push(data);
                     }
-                } else if (typeof data === 'number') {
-                    ports.push(data);
+                } catch (e) {
+                    // Ignore parse errors
                 }
-            } catch (e) {
-                // Ignore parse errors
             }
-            return ports.sort((a, b) => a - b);
-        }
+            return customPorts;
+        };
 
-        // Fallback: netstat parsing
         const portRegex = new RegExp(`(?:127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1?\\]):(\\d+)\\s+(?:0\\.0\\.0\\.0:0|\\[::\\]:0|\\*:\\*).*?\\s+${pid}$`, 'gim');
-        let match;
-
-        while ((match = portRegex.exec(stdout)) !== null) {
-            const port = parseInt(match[1], 10);
-            if (!ports.includes(port)) {
-                ports.push(port);
-            }
-        }
-
-        return ports.sort((a, b) => a - b);
+        return super.parseListeningPorts(stdout, portRegex, customParser);
     }
 }
 
 /**
  * Unix Strategy - Placeholder for macOS/Linux support
  */
-class UnixStrategy {
+class UnixStrategy extends BaseStrategy {
     constructor(platform) {
+        super();
         this.platform = platform;
     }
 
@@ -233,17 +276,17 @@ class UnixStrategy {
 
                 const cmd = line.substring(parts[0].length).trim();
 
-                const portMatch = cmd.match(/--extension_server_port[=\s]+(\d+)/);
-                const tokenMatch = cmd.match(/--csrf_token[=\s]+([a-zA-Z0-9\-]+)/);
+                const extensionPort = this.parseExtensionPort(cmd);
+                const csrfToken = this.parseCsrfToken(cmd);
 
-                if (!tokenMatch || !tokenMatch[1]) {
+                if (!csrfToken) {
                     continue;
                 }
 
                 return {
                     pid,
-                    extensionPort: portMatch ? parseInt(portMatch[1], 10) : 0,
-                    csrfToken: tokenMatch[1]
+                    extensionPort,
+                    csrfToken
                 };
             } catch (e) {
                 // Continue to next line on parse error
@@ -261,18 +304,8 @@ class UnixStrategy {
     }
 
     parseListeningPorts(stdout, pid) {
-        const ports = [];
-        const lsofRegex = new RegExp(`^\\S+\\s+${pid}\\s+.*?(?:TCP|UDP)\\s+(?:\\*|[\\d.]+|\\[[\\da-f:]+\\]):(\\d+)\\s+\\(LISTEN\\)`, 'gim');
-
-        let match;
-        while ((match = lsofRegex.exec(stdout)) !== null) {
-            const port = parseInt(match[1], 10);
-            if (!ports.includes(port)) {
-                ports.push(port);
-            }
-        }
-
-        return ports.sort((a, b) => a - b);
+        const portRegex = new RegExp(`^\\S+\\s+${pid}\\s+.*?(?:TCP|UDP)\\s+(?:\\*|[\\d.]+|\\[[\\da-f:]+\\]):(\\d+)\\s+\\(LISTEN\\)`, 'gim');
+        return super.parseListeningPorts(stdout, portRegex);
     }
 }
 

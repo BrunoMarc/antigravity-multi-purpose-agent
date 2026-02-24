@@ -197,6 +197,39 @@ async function testCheckPromptFeature() {
     assert(disabledCheck.schedule.checkPromptEnabled === false, 'Check prompt can be disabled');
 }
 
+async function testCheckPromptRuntimeInterleaving() {
+    console.log('\n🧩 Testing Check Prompt Runtime Interleaving...');
+
+    await sendCommand('stopQueue');
+    await sendCommand('updateSchedule', {
+        enabled: true,
+        mode: 'queue',
+        queueMode: 'keep',
+        silenceTimeout: 300,
+        checkPromptEnabled: true,
+        checkPromptText: 'Runtime check prompt',
+        prompts: ['Primary Task 1', 'Primary Task 2']
+    });
+    await delay(300);
+
+    const startResult = await sendCommand('startQueue');
+    assert(startResult.success, 'Check prompt queue starts successfully');
+    await delay(400);
+
+    let status = await sendCommand('getQueueStatus');
+    assert(status.status.queueLength === 4, 'Runtime queue interleaves task+check prompts (2 tasks => 4 items)');
+    assert(status.status.currentPrompt?.type === 'task', 'First runtime item is task');
+
+    const skipResult = await sendCommand('skipPrompt');
+    assert(skipResult.success, 'Can skip from task to check prompt');
+    await delay(400);
+
+    status = await sendCommand('getQueueStatus');
+    assert(status.status.currentPrompt?.type === 'check', 'Next runtime item is check prompt after skip');
+
+    await sendCommand('stopQueue');
+}
+
 async function testQueueStatus() {
     console.log('\n📊 Testing Queue Status...');
 
@@ -214,13 +247,17 @@ async function testQueueStatus() {
 async function testQueueControl() {
     console.log('\n🎮 Testing Queue Control (Start/Pause/Resume/Stop)...');
 
+    await sendCommand('stopQueue');
+    await delay(2200); // Respect Scheduler startQueue dampener (<2s calls are ignored)
+
     // Setup: Create a queue with prompts
     const testPrompts = ['Queue Control Test Prompt 1', 'Queue Control Test Prompt 2'];
     await sendCommand('updateSchedule', {
         mode: 'queue',
         prompts: testPrompts,
         enabled: true,
-        queueMode: 'keep',
+        queueMode: 'loop',
+        checkPromptEnabled: false,
         silenceTimeout: 300 // Long timeout to prevent auto-advance during test
     });
     await delay(300);
@@ -307,6 +344,90 @@ async function testConversationTargeting() {
     assert(status.status.targetConversation === '', 'Target conversation is set to current (empty)');
 }
 
+async function testDebugActionCoverage() {
+    console.log('\n🛠️ Testing Debug Action Coverage...');
+
+    const unknown = await sendCommand('unknownActionCoverageProbe');
+    assert(unknown.success === false, 'Unknown debug action is rejected');
+    assert(typeof unknown.error === 'string' && unknown.error.includes('Unknown debug action'), 'Unknown action returns clear error');
+
+    const resetRes = await sendCommand('resetQueue');
+    assert(resetRes.success === true, 'resetQueue action works via debug server');
+
+    const hybridStatus = await sendCommand('getHybridStatus');
+    assert(hybridStatus.success === true, 'getHybridStatus action works');
+    assert(hybridStatus.hybrid !== undefined, 'getHybridStatus returns hybrid payload');
+
+    const hybridPoll = await sendCommand('pollAutoAccept');
+    assert(hybridPoll.success === true, 'pollAutoAccept action works');
+
+    const hybridUpdate = await sendCommand('updateHybridConfig', {
+        config: {
+            commandStrategy: { pollInterval: 650 }
+        }
+    });
+    assert(hybridUpdate.success === true, 'updateHybridConfig action works');
+}
+
+async function testQueueWaitsForBusyConversation() {
+    console.log('\n⏳ Testing Queue Wait-Until-Idle Behavior...');
+
+    const uniquePrompt = `BusyWaitPrompt_${Date.now()}`;
+
+    // Force "conversation busy" from browser side.
+    await sendCommand('evaluateInBrowser', {
+        code: `window.__autoAcceptIsConversationWorking = () => true; true;`
+    });
+
+    const historyBefore = await sendCommand('getPromptHistory');
+    const beforeCount = Array.isArray(historyBefore.history) ? historyBefore.history.length : 0;
+
+    await sendCommand('stopQueue');
+    await delay(2200); // respect startQueue dampener
+
+    await sendCommand('updateSchedule', {
+        enabled: true,
+        mode: 'queue',
+        queueMode: 'consume',
+        checkPromptEnabled: false,
+        silenceTimeout: 30,
+        prompts: [uniquePrompt]
+    });
+    await delay(300);
+
+    const started = await sendCommand('startQueue');
+    assert(started.success, 'Queue start accepted while conversation is busy');
+
+    await delay(3000);
+
+    const statusBusy = await sendCommand('getQueueStatus');
+    assert(statusBusy.status.isRunningQueue === true, 'Queue remains running while waiting for busy conversation');
+    assert(statusBusy.status.conversationStatus === 'waiting', 'Queue reports waiting state while conversation is busy');
+
+    const historyDuring = await sendCommand('getPromptHistory');
+    const duringCount = Array.isArray(historyDuring.history) ? historyDuring.history.length : 0;
+    assert(duringCount === beforeCount, 'No prompt is sent while conversation is busy');
+
+    // Release busy signal and verify prompt eventually sends.
+    await sendCommand('evaluateInBrowser', {
+        code: `window.__autoAcceptIsConversationWorking = () => false; true;`
+    });
+
+    let delivered = false;
+    for (let i = 0; i < 8; i++) {
+        await delay(1000);
+        const h = await sendCommand('getPromptHistory');
+        const list = Array.isArray(h.history) ? h.history : [];
+        if (list.some(entry => entry.text && entry.text.includes(uniquePrompt))) {
+            delivered = true;
+            break;
+        }
+    }
+    assert(delivered, 'Queue sends prompt after conversation becomes idle');
+
+    await sendCommand('stopQueue');
+}
+
 async function testIntervalAndDailyModes() {
     console.log('\n⏰ Testing Interval and Daily Modes...');
 
@@ -367,8 +488,111 @@ async function testSendPromptDirect() {
     assert(historyResult.success, 'Can query history after send');
 }
 
+async function testQueueWaitsWhenChatBusy() {
+    console.log('\n⏳ Testing Queue Wait/Retry When Chat Is Busy...');
+
+    const busyPrompt = `Busy Retry Test ${Date.now()}`;
+
+    await sendCommand('stopQueue');
+    await delay(2200); // Respect queue start dampener
+
+    await sendCommand('updateSchedule', {
+        enabled: true,
+        mode: 'queue',
+        prompts: [busyPrompt],
+        queueMode: 'loop',
+        silenceTimeout: 300,
+        checkPromptEnabled: false
+    });
+    await delay(300);
+
+    // Force first prompt-send attempt to fail once (simulates busy chat), then allow success.
+    await sendCommand('evaluateInBrowser', {
+        code: `(function(){
+            try {
+                if (typeof window === 'undefined') return 'no-window';
+                if (window.__mpaBusyRetryPatchInstalled) return 'already-installed';
+                window.__mpaBusyRetryPatchInstalled = true;
+                window.__mpaBusyRetryFailCount = 0;
+                window.__mpaBusyRetryOriginalSend = window.__autoAcceptSendPrompt;
+                window.__mpaBusyRetryOriginalSendConv = window.__autoAcceptSendPromptToConversation;
+
+                window.__autoAcceptSendPrompt = async function(){
+                    if (window.__mpaBusyRetryFailCount < 1) {
+                        window.__mpaBusyRetryFailCount += 1;
+                        return false;
+                    }
+                    if (typeof window.__mpaBusyRetryOriginalSend === 'function') {
+                        return await window.__mpaBusyRetryOriginalSend.apply(this, arguments);
+                    }
+                    return false;
+                };
+
+                window.__autoAcceptSendPromptToConversation = async function(){
+                    if (window.__mpaBusyRetryFailCount < 1) {
+                        window.__mpaBusyRetryFailCount += 1;
+                        return false;
+                    }
+                    if (typeof window.__mpaBusyRetryOriginalSendConv === 'function') {
+                        return await window.__mpaBusyRetryOriginalSendConv.apply(this, arguments);
+                    }
+                    return false;
+                };
+
+                return 'installed';
+            } catch (e) {
+                return 'error:' + (e && e.message ? e.message : String(e));
+            }
+        })()`
+    });
+
+    const startResult = await sendCommand('startQueue');
+    assert(startResult.success, 'Queue start accepted for busy/retry test');
+    await delay(500);
+
+    const statusAfterStart = await sendCommand('getQueueStatus');
+    assert(statusAfterStart.status.isRunningQueue === true, 'Queue remains running while waiting/retrying');
+
+    let foundInHistory = false;
+    for (let i = 0; i < 12; i++) {
+        await delay(1000);
+        const historyRes = await sendCommand('getPromptHistory');
+        if (historyRes.success && Array.isArray(historyRes.history)) {
+            foundInHistory = historyRes.history.some(h => h.text && h.text.includes(busyPrompt));
+            if (foundInHistory) break;
+        }
+    }
+    assert(foundInHistory, 'Prompt eventually sends after transient busy condition');
+
+    // Restore patched browser send functions.
+    await sendCommand('evaluateInBrowser', {
+        code: `(function(){
+            try {
+                if (typeof window === 'undefined') return 'no-window';
+                if (window.__mpaBusyRetryPatchInstalled) {
+                    if (window.__mpaBusyRetryOriginalSend) {
+                        window.__autoAcceptSendPrompt = window.__mpaBusyRetryOriginalSend;
+                    }
+                    if (window.__mpaBusyRetryOriginalSendConv) {
+                        window.__autoAcceptSendPromptToConversation = window.__mpaBusyRetryOriginalSendConv;
+                    }
+                    window.__mpaBusyRetryPatchInstalled = false;
+                }
+                return 'restored';
+            } catch (e) {
+                return 'error:' + (e && e.message ? e.message : String(e));
+            }
+        })()`
+    });
+
+    await sendCommand('stopQueue');
+}
+
 async function testCompleteWorkflow() {
     console.log('\n🔧 Testing Complete Workflow (End-to-End)...');
+
+    await sendCommand('stopQueue');
+    await delay(2200); // Respect scheduler startQueue dampener
 
     // 1. Setup a complete queue configuration
     await sendCommand('updateSchedule', {
@@ -395,9 +619,18 @@ async function testCompleteWorkflow() {
     await sendCommand('startQueue');
     await delay(500);
 
-    status = await sendCommand('getQueueStatus');
-    assert(status.status.isRunningQueue === true, 'E2E: Queue running after start');
-    assert(status.status.queueLength > 0, 'E2E: Runtime queue has items');
+    let runningObserved = false;
+    for (let i = 0; i < 6; i++) {
+        status = await sendCommand('getQueueStatus');
+        if (status?.status?.isRunningQueue && status?.status?.queueLength > 0) {
+            runningObserved = true;
+            break;
+        }
+        await delay(500);
+    }
+
+    assert(runningObserved === true, 'E2E: Queue running after start');
+    assert((status?.status?.queueLength || 0) > 0, 'E2E: Runtime queue has items');
 
     // 5. Pause and verify
     await sendCommand('pauseQueue');
@@ -448,13 +681,17 @@ async function main() {
         await testPromptManagement();
         await testSilenceTimeout();
         await testCheckPromptFeature();
+        await testCheckPromptRuntimeInterleaving();
         await testQueueStatus();
         await testQueueControl();
         await testPromptHistory();
         await testConversationTargeting();
+        await testDebugActionCoverage();
+        await testQueueWaitsForBusyConversation();
         await testIntervalAndDailyModes();
         await testScheduleEnabledToggle();
         await testSendPromptDirect();
+        await testQueueWaitsWhenChatBusy();
         await testCompleteWorkflow();
 
     } catch (e) {

@@ -3,22 +3,18 @@ const { execSync, spawn } = require('child_process');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
-
-const DEFAULT_CDP_PORT = 9004;
+const { DEFAULT_CDP_PORT } = require('./constants');
+const { BaseLogger } = require('./base-logger');
 
 /**
  * Robust cross-platform manager for IDE shortcuts and relaunching
  */
-class Relauncher {
+class Relauncher extends BaseLogger {
     constructor(logger = console.log, port = DEFAULT_CDP_PORT) {
+        super(logger, 'Relauncher');
         this.platform = os.platform();
-        this.logger = logger;
         this.port = port;
         this.cdpFlag = `--remote-debugging-port=${port}`;
-    }
-
-    log(msg) {
-        this.logger(`[Relauncher] ${msg}`);
     }
 
     /**
@@ -34,18 +30,18 @@ class Relauncher {
      * Main entry point: ensures CDP is enabled and relaunches if necessary
      */
     async ensureCDPAndRelaunch() {
-        this.log('Checking if CDP flag already present...');
+        this._log('Checking if CDP flag already present...');
         const hasFlag = await this.checkShortcutFlag();
 
         if (hasFlag) {
-            this.log('CDP flag already present.');
+            this._log('CDP flag already present.');
             return { success: true, relaunched: false };
         }
 
         // Best effort: try to modify shortcut for future launches
-        this.log('CDP flag missing. Attempting to modify shortcut...');
+        this._log('CDP flag missing. Attempting to modify shortcut...');
         const modified = await this.modifyShortcut();
-        this.log(modified ? 'Shortcut modified.' : 'Shortcut modification failed (will use direct launch).');
+        this._log(modified ? 'Shortcut modified.' : 'Shortcut modification failed (will use direct launch).');
 
         // Show restart prompt
         const choice = await vscode.window.showInformationMessage(
@@ -80,7 +76,7 @@ class Relauncher {
             if (this.platform === 'darwin') return await this._modifyMacOSShortcut();
             if (this.platform === 'linux') return await this._modifyLinuxShortcut();
         } catch (e) {
-            this.log(`Modification error: ${e.message}`);
+            this._log(`Modification error: ${e.message}`);
         }
         return false;
     }
@@ -124,7 +120,7 @@ if ($modified) { Write-Output "MODIFIED" } else { Write-Output "NO_CHANGE" }
         const content = `#!/bin/bash\nopen -a "${appPath}" --args --remote-debugging-port=${this.port} "$@"`;
 
         fs.writeFileSync(wrapperPath, content, { mode: 0o755 });
-        this.log(`Created macOS wrapper at ${wrapperPath}`);
+        this._log(`Created macOS wrapper at ${wrapperPath}`);
         return true; // We consider creation a success
     }
 
@@ -157,12 +153,10 @@ if ($modified) { Write-Output "MODIFIED" } else { Write-Output "NO_CHANGE" }
         const folders = (vscode.workspace.workspaceFolders || []).map(f => `"${f.uri.fsPath}"`).join(' ');
 
         if (this.platform === 'win32') {
-            // Find the Antigravity executable path
-            const ideName = this.getIdeName();
             // Use process.execPath to get the actual executable path (works for both installed and dev)
             const exePath = process.execPath;
             const cmd = `timeout /t 2 /nobreak >nul & "${exePath}" ${this.cdpFlag} ${folders}`;
-            this.log(`Relaunch command: ${cmd}`);
+            this._log(`Relaunch command: ${cmd}`);
             spawn('cmd.exe', ['/c', cmd], { detached: true, stdio: 'ignore' }).unref();
         } else if (this.platform === 'darwin') {
             const ideName = this.getIdeName();
