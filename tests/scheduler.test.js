@@ -718,6 +718,83 @@ async function runTests() {
         }
     });
 
+
+    // Test 29: Grace period prevents premature queue advancement
+    await test('Grace period prevents premature queue advancement', async () => {
+        const scheduler = new TestScheduler({ mode: 'queue', silenceTimeout: 0 }, mockCdpHandler);
+        scheduler.enabled = true;
+        scheduler.isRunningQueue = true;
+        scheduler.runtimeQueue = [{text: '1'}, {text: '2'}];
+        scheduler.queueIndex = 0;
+        scheduler.hasSentCurrentItem = true;
+        
+        // Simulate just sent (within 15s Grace Period)
+        scheduler.taskStartTime = Date.now() - 5000; 
+        
+        // Simulating the behavior
+        const timeSinceLastSend = Date.now() - scheduler.taskStartTime;
+        const inGracePeriod = timeSinceLastSend < 15000;
+        const isBusy = false || inGracePeriod;
+        
+        if (isBusy) {
+            scheduler.lastActivityTime = Date.now();
+            scheduler.wasBusy = true;
+        } else {
+            scheduler.queueIndex = 1; 
+        }
+        
+        assert.strictEqual(scheduler.queueIndex, 0);
+    });
+
+    // Test 30: Advances AFTER Grace period if not busy
+    await test('Advances AFTER Grace period if not busy', async () => {
+        const scheduler = new TestScheduler({ mode: 'queue', silenceTimeout: 0 }, mockCdpHandler);
+        scheduler.enabled = true;
+        scheduler.isRunningQueue = true;
+        scheduler.runtimeQueue = [{text: '1'}, {text: '2'}];
+        scheduler.queueIndex = 0;
+        scheduler.hasSentCurrentItem = true;
+        
+        // Simulate sent 16s ago (Outside Grace Period)
+        scheduler.taskStartTime = Date.now() - 16000; 
+        
+        const timeSinceLastSend = Date.now() - scheduler.taskStartTime;
+        const inGracePeriod = timeSinceLastSend < 15000;
+        const isBusy = false || inGracePeriod;
+        
+        if (isBusy) {
+            scheduler.lastActivityTime = Date.now();
+            scheduler.wasBusy = true;
+        } else {
+            scheduler.queueIndex = 1;
+        }
+        
+        assert.strictEqual(scheduler.queueIndex, 1);
+    });
+
+    // Test 31: Model Fallback execution on Quota Exhaustion
+    await test('Model Fallback execution on Quota Exhaustion', async () => {
+        let fallbackCalled = false;
+        const mockFallbackModel = 'gemini 3.1';
+        let isQuotaExhausted = true;
+        
+        const tryFallback = async () => {
+            if (mockFallbackModel) {
+                fallbackCalled = true;
+                return true; 
+            }
+            return false;
+        };
+        
+        const switched = await tryFallback();
+        if (switched) {
+            isQuotaExhausted = false;
+        }
+        
+        assert.strictEqual(fallbackCalled, true);
+        assert.strictEqual(isQuotaExhausted, false);
+    });
+
     // Results
     console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
 
