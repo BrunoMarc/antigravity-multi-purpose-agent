@@ -188,10 +188,47 @@ class TestScheduler {
         return this.promptQueue;
     }
 
-    setQuotaExhausted(exhausted) {
+    async checkSilence() {
+        if (!this.cdpHandler || !this.isRunningQueue) return;
+        if (this.config.mode !== 'queue') return;
+
+        try {
+            const timeSinceLastSend = Date.now() - this.taskStartTime;
+            const inGracePeriod = timeSinceLastSend < 15000;
+
+            const isBusy = await this.cdpHandler.isBusy() || inGracePeriod;
+            
+            if (isBusy) {
+                this.lastActivityTime = Date.now();
+                this.wasBusy = true;
+            } else {
+                this.wasBusy = false;
+            }
+
+            const silenceDuration = Date.now() - (this.lastActivityTime || this.lastClickTime || Date.now());
+            const taskDuration = Date.now() - this.taskStartTime;
+
+            if (taskDuration > 15000 && this.hasSentCurrentItem && silenceDuration > this.config.silenceTimeout) {
+                await this.advanceQueue();
+            }
+        } catch (e) {}
+    }
+
+    async setQuotaExhausted(exhausted) {
         const wasExhausted = this.isQuotaExhausted;
         this.isQuotaExhausted = exhausted;
-        return { wasExhausted, nowExhausted: exhausted };
+        
+        if (exhausted && !wasExhausted) {
+            const fallbackModel = mockConfig['fallbackModel'];
+            let switched = false;
+            if (fallbackModel && this.config.mode === 'queue' && this.isRunningQueue) {
+                switched = await this.cdpHandler.switchModel(fallbackModel);
+            }
+            if (switched) {
+                this.isQuotaExhausted = false;
+            }
+        }
+        return { wasExhausted, nowExhausted: this.isQuotaExhausted };
     }
 
     getStatus() {
@@ -396,11 +433,11 @@ async function runTests() {
     await test('setQuotaExhausted tracks state transitions', async () => {
         const scheduler = new TestScheduler({}, mockCdpHandler);
 
-        let result = scheduler.setQuotaExhausted(true);
+        let result = await scheduler.setQuotaExhausted(true);
         assert.strictEqual(result.wasExhausted, false);
         assert.strictEqual(result.nowExhausted, true);
 
-        result = scheduler.setQuotaExhausted(false);
+        result = await scheduler.setQuotaExhausted(false);
         assert.strictEqual(result.wasExhausted, true);
         assert.strictEqual(result.nowExhausted, false);
     });
@@ -721,7 +758,9 @@ async function runTests() {
 
     // Test 29: Grace period prevents premature queue advancement
     await test('Grace period prevents premature queue advancement', async () => {
-        const scheduler = new TestScheduler({ mode: 'queue', silenceTimeout: 0 }, mockCdpHandler);
+        const scheduler = new TestScheduler({}, mockCdpHandler);
+        scheduler.loadConfig();
+        scheduler.config.silenceTimeout = 0; // force advance if not busy
         scheduler.enabled = true;
         scheduler.isRunningQueue = true;
         scheduler.runtimeQueue = [{text: '1'}, {text: '2'}];
@@ -731,24 +770,19 @@ async function runTests() {
         // Simulate just sent (within 15s Grace Period)
         scheduler.taskStartTime = Date.now() - 5000; 
         
-        // Simulating the behavior
-        const timeSinceLastSend = Date.now() - scheduler.taskStartTime;
-        const inGracePeriod = timeSinceLastSend < 15000;
-        const isBusy = false || inGracePeriod;
+        mockCdpHandler.busy = false;
+        mockCdpHandler.isBusy = async () => mockCdpHandler.busy;
         
-        if (isBusy) {
-            scheduler.lastActivityTime = Date.now();
-            scheduler.wasBusy = true;
-        } else {
-            scheduler.queueIndex = 1; 
-        }
+        await scheduler.checkSilence();
         
         assert.strictEqual(scheduler.queueIndex, 0);
     });
 
     // Test 30: Advances AFTER Grace period if not busy
     await test('Advances AFTER Grace period if not busy', async () => {
-        const scheduler = new TestScheduler({ mode: 'queue', silenceTimeout: 0 }, mockCdpHandler);
+        const scheduler = new TestScheduler({}, mockCdpHandler);
+        scheduler.loadConfig();
+        scheduler.config.silenceTimeout = 0;
         scheduler.enabled = true;
         scheduler.isRunningQueue = true;
         scheduler.runtimeQueue = [{text: '1'}, {text: '2'}];
@@ -757,44 +791,41 @@ async function runTests() {
         
         // Simulate sent 16s ago (Outside Grace Period)
         scheduler.taskStartTime = Date.now() - 16000; 
+        scheduler.lastActivityTime = Date.now() - 16000;
+        scheduler.lastClickTime = Date.now() - 16000;
         
-        const timeSinceLastSend = Date.now() - scheduler.taskStartTime;
-        const inGracePeriod = timeSinceLastSend < 15000;
-        const isBusy = false || inGracePeriod;
+        mockCdpHandler.busy = false;
+        mockCdpHandler.isBusy = async () => mockCdpHandler.busy;
         
-        if (isBusy) {
-            scheduler.lastActivityTime = Date.now();
-            scheduler.wasBusy = true;
-        } else {
-            scheduler.queueIndex = 1;
-        }
+        await scheduler.checkSilence();
         
         assert.strictEqual(scheduler.queueIndex, 1);
     });
 
     // Test 31: Model Fallback execution on Quota Exhaustion
     await test('Model Fallback execution on Quota Exhaustion', async () => {
-        let fallbackCalled = false;
-        const mockFallbackModel = 'gemini 3.1';
-        let isQuotaExhausted = true;
+        const scheduler = new TestScheduler({}, mockCdpHandler);
+        scheduler.loadConfig();
+        scheduler.enabled = true;
+        scheduler.isRunningQueue = true;
+        scheduler.isQuotaExhausted = false;
         
-        const tryFallback = async () => {
-            if (mockFallbackModel) {
-                fallbackCalled = true;
-                return true; 
+        mockConfig['fallbackModel'] = 'gemini 3.1';
+        
+        mockCdpHandler.modelSwitched = false;
+        mockCdpHandler.switchModel = async (model) => {
+            if (model === 'gemini 3.1') {
+                mockCdpHandler.modelSwitched = true;
+                return true;
             }
             return false;
         };
-        
-        const switched = await tryFallback();
-        if (switched) {
-            isQuotaExhausted = false;
-        }
-        
-        assert.strictEqual(fallbackCalled, true);
-        assert.strictEqual(isQuotaExhausted, false);
-    });
 
+        await scheduler.setQuotaExhausted(true);
+        
+        assert.strictEqual(mockCdpHandler.modelSwitched, true);
+        assert.strictEqual(scheduler.isQuotaExhausted, false);
+    });
     // Results
     console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
 
