@@ -1330,8 +1330,12 @@
             // Find current model button
             const btns = queryAll('button, div[role="button"], div[role="combobox"]');
             const currentModelBtn = btns.find(b => {
+                if (!isElementVisible(b)) return false;
                 const text = (b.textContent || '').trim().toLowerCase();
-                return isElementVisible(b) && (text.includes('claude') || text.includes('gpt-') || text.includes('gemini'));
+                const hasModelName = text.includes('claude') || text.includes('gpt') || text.includes('gemini') || text.includes('o1') || text.includes('deepseek') || text.includes('llama');
+                const hasMenuPopup = b.getAttribute('aria-haspopup') === 'menu' || b.getAttribute('aria-haspopup') === 'listbox';
+                // The button should either explicitly contain a known model name, or be a combobox with short text (model names are usually < 30 chars)
+                return hasModelName || (hasMenuPopup && text.length > 2 && text.length < 40 && !text.includes('cancel') && !text.includes('stop'));
             });
 
             if (!currentModelBtn) {

@@ -90,6 +90,9 @@ class SettingsPanel {
                         if (message.autoContinueEnabled !== undefined) {
                             await vscode.workspace.getConfiguration('auto-accept.autoContinue').update('enabled', message.autoContinueEnabled, vscode.ConfigurationTarget.Global);
                         }
+                        if (message.fallbackModel !== undefined) {
+                            await vscode.workspace.getConfiguration('auto-accept').update('fallbackModel', message.fallbackModel, vscode.ConfigurationTarget.Global);
+                        }
                         break;
 
                     case 'saveAndStartQueue':
@@ -124,6 +127,7 @@ class SettingsPanel {
                         if (scheduleData.checkPromptText !== undefined) await configToSave.update('checkPrompt.text', scheduleData.checkPromptText, vscode.ConfigurationTarget.Global);
                         if (scheduleData.resumeEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.antigravityQuota.resume').update('enabled', scheduleData.resumeEnabled, vscode.ConfigurationTarget.Global);
                         if (scheduleData.autoContinueEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.autoContinue').update('enabled', scheduleData.autoContinueEnabled, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.fallbackModel !== undefined) await vscode.workspace.getConfiguration('auto-accept').update('fallbackModel', scheduleData.fallbackModel, vscode.ConfigurationTarget.Global);
 
                         // 2. Start Queue
                         console.log('[Extension] Executing auto-accept.startQueue command'); // DEBUG LOG ADDED
