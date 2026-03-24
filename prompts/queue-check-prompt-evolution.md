@@ -1,16 +1,24 @@
-# 🛡️ Loop Autônomo — Checkpoint & Evolução
+# 🛡️ Loop Autônomo — Checkpoint Rigoroso & Geração de Próximo Passo
 
-Você acaba de concluir a execução da última task da Fila de Autonomia. Este é o **Check Prompt** do sistema de Loop. 
+Você acaba de concluir uma task da Fila de Autonomia. **A missão não terminou.** O seu objetivo agora é avaliar friamente o que foi construído, garantir que os padrões de qualidade foram não apenas mantidos, mas superados, e engatilhar o próximo desafio.
 
-Seu dever é validar implacavelmente o que você mesmo acabou de construir e preparar o solo para o próximo turno.
+## 1. Verificação Impiedosa
+- Você rodou os testes unitários do próprio gerador (`node --test scripts/e2e-gen/__tests__/*.test.cjs`)? 
+- Você rodou o comando para regerar TODOS os testes da aplicação para ver se suas alterações no template AST não quebraram outros módulos (`npm run gen:spec:all`)?
+- A cobertura de testes do que você acabou de criar atende à meta de >90% e 100% de pass rate?
 
-## Protocolo de Validação:
-1. **Verificação de Regressão:** Execute testes unitários rápidos (`node --test scripts/e2e-gen/__tests__/*.test.cjs`). Os templates continuam válidos?
-2. **Avaliação Crítica:** O problema que você propôs resolver (ex: Form validation timeouts) foi extinto? Analise se não sobraram bugs idênticos em outros módulos (reutilize código).
-3. **Commit Sem Push:** Se o código estiver estável e limpo, rode `git commit -am "chore: auto-checkpoint do loop de evolução"`.
+**Se a resposta para qualquer pergunta acima for NÃO:** PARE. Identifique o erro, corrija o script gerador agora mesmo e refaça a validação.
 
-## Preparação para a Próxima Task (Auto-Geração de Prompt)
-O Antigravity vai ler a sua resposta a esta mensagem e alimentar a fila com o seu próximo passo.
-Para isso, você deve terminar esta mensagem escrevendo um cabeçalho literal chamado `### PROXIMA_TASK_DA_FILA`, e logo abaixo dele colocar as instruções claras e exatas que **você mesmo precisará** na próxima execução para continuar destruindo os 59 erros que faltam (ou prosseguir para o próximo épico de AST).
+## 2. Ponto de Salvamento (Commit)
+Se o resultado for um sucesso cirúrgico:
+- Use os comandos bash `git add .` e `git commit -m "chore: auto-checkpoint do loop de evolução - [Seu Resumo Aqui]"`
+- NUNCA dê push. 
 
-Siga este fluxo e não pare de iterar até que o Pass Rate chegue a 100%!
+## 3. O Próximo Escopo (Auto-Alimentação da Fila)
+A Fila de Autonomia precisa saber o que você fará a seguir. 
+Leia o contexto geral do projeto (P0, P1, P2) e declare sua próxima movimentação. 
+
+**MANDATÓRIO:** Você deve terminar a sua resposta com um bloco markdown exato no seguinte formato:
+
+### PROXIMA_TASK_DA_FILA
+[Descreva aqui, com detalhes técnicos, diretórios e objetivos, qual é a exata próxima fragilidade do sistema (MSW, E2E ou Unit) que você vai arrumar quando este loop rodar de novo em 30 segundos.]

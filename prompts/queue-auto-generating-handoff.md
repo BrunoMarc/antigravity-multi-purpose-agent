@@ -1,28 +1,37 @@
-# 🌳 Autonomous AST Migration Loop — Auto-Generating Handoff Prompt
+# 🌳 MIGRATION & STABILIZATION INFINITE LOOP — AST BLUEPRINT PROJECT
 
-## Contexto e Objetivo
-Você é o engenheiro autônomo responsável pela **Migração AST** dos geradores de teste do projeto Blueprint. Nossa arquitetura E2E agora roda com `navigationSectionMap` recursivo e timings corretos via `waitFor`.
+## A Visão Macro (O Épico)
+Nós acabamos de realizar um refatoramento arquitetural massivo no projeto Blueprint: nós abandonamos a extração de configurações via Regex, que era frágil e propensa a falhas de indentação, e migramos para um parser tipado e profundo usando **AST (ts-morph / TypeScript Compiler API)**.
+Nosso ecossistema possui **Geradores de Códigos** baseados nesses blueprints que geram de forma automatizada:
+1. **Testes Unitários (Jest)** - via `scripts/unit-spec-gen.cjs`
+2. **Testes E2E (Playwright)** - via `scripts/spec-gen.cjs` / `templates/*.template.cjs`
+3. **Mocks e Handlers (MSW)** - via `scripts/msw-gen/`
 
-O seu objetivo principal não é apenas corrigir os bugs listados, mas sim **operar como uma máquina autônoma de diagnóstico, implementação e reavaliação**.
+**A Missão Inegociável:** Nós não vamos apenas "consertar os quebrados" da migração AST para igualar o antigo patamar do regex. A meta é criar geradores exaustivamente inteligentes que possuam Cobertura Máxima (100% dos cenários) e gerem testes (outputs) com Pass Rate de 100%. NENHUM bug, NENHUMA task deixada para depois. O trabalho autônomo é infinito.
 
-## O Ciclo Infinito de Resiliência
-Você deve adotar um modelo mental onde não há "fim" real enquanto houver falhas. O Antigravity rodará sua Queue periodicamente. Você DEVE:
-1. **Nunca parar silenciosamente** ao deparar-se com problemas fora da sua área de atuação original. Adapte-se e conserte-os.
-2. **Ser Exaustivamente Proativo:** Se identificar 59 falhas não-sistêmicas, não corrija apenas uma e termine. Agrupe-as e resolva-as por lotes.
-3. Ao finalizar sua geração, você será validado pelo Check Prompt da extensão de Loop. Se você deixou gaps, o Check Prompt irá cobrar você.
+## Regras de Execução Autônoma
+Como um Agente Autônomo Antigravity, você responderá a este prompt repetidas vezes num loop infinito (orquestrado pelo Multi Purpose Agent).
+1. **Proatividade Absoluta:** O trabalho NUNCA acaba. Se você arrumou um gap de testes ou fixou 10 bugs E2E, não pare. Encontre a próxima fragilidade do sistema (MSW não tem branch coverage? E2E não testa *catalogToggle*? Unit não testa *fullscreenModal*?) e engate a marcha.
+2. **NUNCA modifique o Output Manualmente:** Se um teste e2e (`*.generated.spec.ts`) ou unitário falhar, **NUNCA** edite o arquivo gerado para consertar. A correção deve ser SEMPRE feita no script gerador (os bridges AST, os templates, ou as funções parseadoras). Depois, você obrigatoriamente roda o gerador para atualizar o arquivo.
+3. **Seja Impiedoso nos Testes:** Testar não é apenas dar "npm run test" num mock bobo. É regerar TODAS as specs afetadas da aplicação e validá-las em ambiente real contra o frontend.
 
-## Problemas Atuais (O Foco Imediato)
-Nós estabilizamos a navegação raiz e estamos com 99.0% de Pass Rate, mas restam 59 falhas módulo-específicas:
-- **Timeouts de form validation (~20):** O teste "should enable save when valid values are entered" esgota o tempo. O Angular pode estar precisando de blur ou focus events para computar a revalidação.
-- **Sub-nested resources (~15 em `usuarios`):** `history` e `user-tickets` não encontram o botão `add`. A navegação interna desses nested forms diverge do fluxo principal.
-- **Vacations section (~10):** Timeout deletando/adicionando férias (`employees`, `controle-ferias`).
-- **Permissions/Tags (~14):** `usuarios` tem falhas em blocos aninhados.
+## A Fila de Ataque Prioritária (Ajuste à medida que resolveres)
+*(Atualmente focados nos ecos do E2E Stabilization)*
 
-## Instrução Base de Execução (Siga estritamente)
-1. **Descobrir:** Analise o histórico e os arquivos do projeto para os pontos acima (ex: `nested-resources.template.ts`, form validation em testes anteriores).
-2. **Implementar:** Aplique a correção nos *templates geradores* (NUNCA nos `.generated.spec.ts` diretamente).
-3. **Gerar:** Rode os scripts correspondentes para espelhar as alterações nos arquivos gerados (`npm run gen:spec:all` ou específico).
-4. **Validar:** Execute os testes localmente (`node --test scripts/e2e-gen/__tests__/*.test.cjs` e/ou os E2Es das últimas falhas `--last-failed`).
-5. **Autonomia (Novo Handoff):** Antes de concluir, DEIXE DOCUMENTADO qual é o PRÓXIMO BUG e o PRÓXIMO ESCOPO no formato de um relatório Handoff para você mesmo na próxima iteração da fila.
+**P0: Falhas Residuais do E2E (As 59 falhas não-sistêmicas do último batch)**
+- Resolver timeouts de *Form Validation* em testes onde o botão Save deveria habilitar.
+- Consertar navegação e adição de *Sub-nested resources* (ex: `history` e `user-tickets` no módulo `usuarios`).
+- Corrigir a deleção intermitente da seção de *Vacations/Férias* (`employees`).
 
-Trabalhe agora no Lote 1 de falhas (Sub-nested resources ou Form Validation timeouts). Resolva, teste e documente a saída.
+**P1: Aprofundamento da Cobertura AST (Features que o Regex nunca sonhou)**
+- Validar profundamente se os campos tipo `editor` (Rich Text), `statusConfig`, `linkTo`, `catalogToggle` e validações compostas (`requiredIf`) agora estão sendo extraídos com todo o seu contexto pelo AST e gerando testes unitários/E2E agressivos.
+
+**P2: Cobertura Interna dos Próprios Geradores (>90%)**
+- Auditar cada pasta `__tests__` em `scripts/`. Tem template E2E ou classe utilitária do AST sem teste unitário dedicado? Crie-o. Use Jest coverage para garantir que não existam *blind spots* na nossa arquitetura geradora.
+
+## O Que Você Deve Fazer NESTE Exato Ciclo
+1. Analise o estado atual dos bugs ou a saúde da cobertura de testes.
+2. Planeje qual lote de problemas da lista acima (ou da sua própria análise técnica de falhas) você resolverá nos próximos minutos.
+3. Inicie imediatamente as implementações e refatorações no código dos geradores.
+4. Execute os scripts para REGERAR as specs do projeto.
+5. Quando achar que terminou, NÃO conclua declarando vitória definitiva. Conclua com um **Relatório de Transição**, preparando o terreno para o Check Prompt te validar severamente.
