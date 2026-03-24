@@ -474,18 +474,23 @@
      */
     function isElementVisible(el) {
         if (!el || !el.isConnected) return false;
+        
+        const rect = el.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return false;
+
         let current = el;
         while (current && current !== document.body) {
             const style = window.getComputedStyle(current);
             if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-            if (current.className && typeof current.className === 'string') {
-                const classList = current.className.split(' ');
-                if (classList.includes('hidden') && !classList.includes('overflow-hidden')) return false;
+            
+            if (current.classList && current.classList.contains('hidden') && !current.classList.contains('overflow-hidden')) {
+                return false;
             }
-            current = current.parentElement;
+            
+            // Traverse up, crossing Shadow DOM boundaries if necessary
+            current = current.parentElement || (current.getRootNode && current.getRootNode().host);
         }
-        const rect = el.getBoundingClientRect();
-        return rect.width > 0;
+        return true;
     }
 
     /**
