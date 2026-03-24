@@ -474,9 +474,18 @@
      */
     function isElementVisible(el) {
         if (!el || !el.isConnected) return false;
-        const style = window.getComputedStyle(el);
+        let current = el;
+        while (current && current !== document.body) {
+            const style = window.getComputedStyle(current);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            if (current.className && typeof current.className === 'string') {
+                const classList = current.className.split(' ');
+                if (classList.includes('hidden') && !classList.includes('overflow-hidden')) return false;
+            }
+            current = current.parentElement;
+        }
         const rect = el.getBoundingClientRect();
-        return style.display !== 'none' && rect.width > 0 && style.visibility !== 'hidden';
+        return rect.width > 0;
     }
 
     /**
@@ -994,7 +1003,7 @@
             for (const btn of candidates) {
                 const label = ((btn.getAttribute('aria-label') || '') + ' ' + (btn.getAttribute('title') || '') + ' ' + (btn.textContent || '')).trim().toLowerCase();
                 if (!label) continue;
-                if (label === 'send' || label.includes(' send') || label.includes('send ') || label.includes('send') || label.includes('submit')) {
+                if (label === 'send' || label.includes('send') || label.includes('submit')) {
                     if (isClickable(btn)) return btn;
                 }
             }
