@@ -544,7 +544,9 @@ class Scheduler {
                 try {
                     let sentCount = 0;
                     let retries = 0;
-                    const maxRetries = 15; // 15 retries * 10 seconds = 2.5 minutes of waiting
+                    const maxRetries = 100; // Allows trying for over 8 hours
+                    let currentDelayMs = 10000; // Start with 10s
+                    const maxDelayMs = 300000; // Cap at 5 minutes
 
                     while (sentCount === 0 && retries < maxRetries) {
                         if (this.isStopped || runId !== this.queueRunId) return;
@@ -560,15 +562,19 @@ class Scheduler {
                         if (sentCount === 0) {
                             retries++;
                             if (retries < maxRetries) {
-                                this.log(`Scheduler: Prompt not delivered (Attempt ${retries}/${maxRetries}). Chat UI might be hidden or loading. Waiting 10s...`);
-                                await new Promise(r => setTimeout(r, 10000));
+                                const delaySec = Math.round(currentDelayMs / 1000);
+                                this.log(`Scheduler: Prompt not delivered (Attempt ${retries}/${maxRetries}). Chat UI missing. Waiting ${delaySec}s before next retry...`);
+                                await new Promise(r => setTimeout(r, currentDelayMs));
+                                
+                                // Exponential backoff: multiply by 1.5, capped at 5 minutes
+                                currentDelayMs = Math.min(currentDelayMs * 1.5, maxDelayMs);
                             }
                         }
                     }
 
                     if (sentCount === 0) {
-                        this.log('Scheduler: Exhausted all retries. No chat input found. Pausing queue to wait for UI readiness.');
-                        vscode.window.showWarningMessage('Multi Purpose: Could not find chat input after 2.5 minutes. Queue paused. Open chat and resume.');
+                        this.log('Scheduler: Exhausted all 100 retries. No chat input found. Pausing queue.');
+                        vscode.window.showWarningMessage('Multi Purpose: Could not find chat input after hours of retrying. Queue paused.');
                         this.pauseQueue();
                         return;
                     }
