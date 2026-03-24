@@ -1,0 +1,33 @@
+---
+description: Documentação sobre a extensão Multi Purpose Agent e como evoluí-la. Use sempre que o usuário pedir para alterar a fila, tempo de idle, ou auto-accept.
+globs: *
+---
+# Multi Purpose Agent Extension (Antigravity)
+
+Esta skill guia o agente sobre como gerenciar, evoluir e entender a extensão "Multi Purpose Agent" instalada no Antigravity IDE. Essa extensão permite **Trabalho Autônomo em Loop Infinito** eliminando a necessidade de aprovação humana.
+
+## O Que a Extensão Faz
+- **Auto-Accept:** Clica em "Always run", "Accept" e "Retry" automaticamente via CDP (Chrome DevTools Protocol).
+- **Prompt Queue:** Fila de prompts sequenciais (para Handoff e Loops de Evolução).
+- **Idle Timeout / Wait for Idle / Grace Period:** Detecta quando a IA está trabalhando (Ex: botão Cancel no terminal, textos "Running", "Generating"). A extensão força um Grace Period de 15s após um envio para não atropelar a fila.
+- **Check Prompt:** Roda verificações e testes (ex: lint, commit sem push) entre um prompt e outro de forma autônoma.
+- **Model Fallback:** Muda de modelo automaticamente (ex: Opus para Flash) quando a quota acaba, mantendo a fila viva.
+
+## Arquitetura (CDP na porta 9004)
+- A extensão não acessa a DOM diretamente pelo código VS Code. Ela se conecta via WebSocket (`ws://127.0.0.1:9004`) no Webview do Antigravity e injeta o script `full_cdp_script.js`.
+- O Agendador e o Cronômetro de Fila ficam no arquivo `extension-impl.js`.
+
+## Protocolo de Evolução (Fast Sync Workflow)
+O repositório principal de desenvolvimento é:
+`/home/bruno/dev/ai-tools/antigravity-multi-purpose-agent-loop/`
+
+1. **Scripts Principais:** 
+   - `main_scripts/full_cdp_script.js` (DOM, Cliques e Heurísticas de "IA Ocupada")
+   - `main_scripts/extension-impl.js` (Lógica da Fila, Fallback de Modelo e Check Prompts)
+   - `main_scripts/settings-panel.js` (UI de Configurações)
+   - `main_scripts/antigravity/strategies.js` (Parser de PID para quota no Linux via `ss`)
+2. **NUNCA altere a versão:** O `package.json` DEVE ficar na versão `999.0.0` para evitar que o marketplace sobrescreva as nossas customizações.
+3. **Sincronização Rápida (Recomendado):** Toda vez que alterar um arquivo `.js` e quiser testar no seu ambiente atual sem precisar empacotar, rode:
+   `npm run sync`
+   *(Isso compila a extensão usando esbuild e a joga direto na pasta oculta do IDE ~/.antigravity/extensions/...)*
+4. **Reload:** A alteração só tem efeito depois do `npm run sync` E o usuário dar "Developer: Reload Window" no Antigravity.
