@@ -156,17 +156,7 @@ class Scheduler {
         this.log('Scheduler started.');
     }
 
-    stop() {
-        if (this.timer) {
-            clearInterval(this.timer);
-            this.timer = null;
-        }
-        if (this.silenceTimer) {
-            clearInterval(this.silenceTimer);
-            this.silenceTimer = null;
-        }
-        this.isRunningQueue = false;
-    }
+    stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } if (this.silenceTimer) { clearInterval(this.silenceTimer); this.silenceTimer = null; } this.isRunningQueue = false; this.isStopped = true; this.queueRunId++; this.conversationStatus = 'idle'; this.isPaused = false; this.promptQueue = Promise.resolve(); }
 
     loadConfig() {
         const cfg = vscode.workspace.getConfiguration('auto-accept.schedule');
@@ -925,7 +915,6 @@ async function activate(context) {
 
             // Initialize Scheduler
             scheduler = new Scheduler(context, cdpHandler, log, { ensureCdpReady: syncSessions });
-            scheduler.start();
 
             debugHandler = new DebugHandler(context, {
                 log,
@@ -1012,6 +1001,10 @@ async function activate(context) {
                 return config.get('enabled', true);
             }),
             vscode.commands.registerCommand('auto-accept.startQueue', async (options) => {
+                if (!isEnabled) {
+                    vscode.window.showWarningMessage('Multi Purpose Agent is currently OFF. Please enable it first.');
+                    return;
+                }
                 log('[Scheduler] Queue start requested via command');
                 if (scheduler) {
                     // Ensure CDP connects/injects the active chat surface before starting the queue.
@@ -1025,9 +1018,11 @@ async function activate(context) {
             }),
             vscode.commands.registerCommand('auto-accept.getQueueStatus', () => {
                 if (scheduler) {
-                    return scheduler.getStatus();
+                    const status = scheduler.getStatus();
+                    status.isExtensionEnabled = isEnabled;
+                    return status;
                 }
-                return { enabled: false, isRunningQueue: false, queueLength: 0, queueIndex: 0, isQuotaExhausted: false };
+                return { enabled: false, isRunningQueue: false, queueLength: 0, queueIndex: 0, isQuotaExhausted: false, isExtensionEnabled: isEnabled };
             }),
             vscode.commands.registerCommand('auto-accept.getConversations', async () => {
                 if (scheduler) {
@@ -1047,16 +1042,19 @@ async function activate(context) {
                 }
             }),
             vscode.commands.registerCommand('auto-accept.pauseQueue', () => {
+                if (!isEnabled) return;
                 if (scheduler) {
                     scheduler.pauseQueue();
                 }
             }),
             vscode.commands.registerCommand('auto-accept.resumeQueue', () => {
+                if (!isEnabled) return;
                 if (scheduler) {
                     scheduler.resumeQueue();
                 }
             }),
             vscode.commands.registerCommand('auto-accept.skipPrompt', async () => {
+                if (!isEnabled) return;
                 if (scheduler) {
                     await scheduler.skipPrompt();
                 }
@@ -1251,6 +1249,21 @@ async function handleToggle(context) {
 
         log('  Calling updateStatusBar...');
         updateStatusBar();
+        
+        // Ensure settings panel updates immediately
+        const panelClass = getSettingsPanel();
+        if (panelClass && panelClass.currentPanel) {
+            panelClass.currentPanel.panel.webview.postMessage({
+                command: 'updateExtensionState',
+                isEnabled: isEnabled
+            });
+        }
+        
+        if (isEnabled) {
+            vscode.window.showInformationMessage('Multi Purpose Agent: ON');
+        } else {
+            vscode.window.showInformationMessage('Multi Purpose Agent: OFF');
+        }
 
         // Do CDP operations in background (don't block toggle)
         if (isEnabled) {
@@ -1351,6 +1364,7 @@ async function startPolling() {
 
     // Initial trigger
     await syncSessions();
+    if (scheduler) scheduler.start();
 
     // Polling now primarily handles the Instance Lock and ensures CDP is active
     pollTimer = setInterval(async () => {

@@ -183,6 +183,9 @@ class SettingsPanel {
                     case 'getQueueStatus':
                         this.sendQueueStatus();
                         break;
+                    case 'getExtensionState':
+                        this.sendExtensionState();
+                        break;
                     case 'getConversations':
                         this.sendConversations();
                         break;
@@ -348,6 +351,14 @@ class SettingsPanel {
                 error: e.message
             });
         }
+    }
+
+    sendExtensionState() {
+        const isEnabled = this.context.globalState.get('auto-accept-enabled-global', false);
+        this.panel.webview.postMessage({
+            command: 'updateExtensionState',
+            isEnabled
+        });
     }
 
     async sendQueueStatus() {
@@ -1213,6 +1224,7 @@ class SettingsPanel {
                     vscode.postMessage({ command: 'getStats' });
                     vscode.postMessage({ command: 'getROIStats' });
                     vscode.postMessage({ command: 'getQueueStatus' });
+                    vscode.postMessage({ command: 'getExtensionState' });
                     vscode.postMessage({ command: 'getConversations' });
                     vscode.postMessage({ command: 'getPromptHistory' });
                 }
@@ -1893,6 +1905,25 @@ class SettingsPanel {
                             }
                         }
                     }
+                    if (msg.command === 'updateExtensionState') {
+                        const startBtn = document.getElementById('startQueueBtn');
+                        const statusText = document.getElementById('queueStatusText');
+                        if (startBtn) {
+                            if (!msg.isEnabled) {
+                                startBtn.disabled = true;
+                                startBtn.innerText = 'Extension is OFF (Turn ON via Status Bar)';
+                                startBtn.style.opacity = '0.5';
+                                startBtn.style.cursor = 'not-allowed';
+                                if (statusText) statusText.innerText = 'Extension Offline';
+                            } else {
+                                startBtn.disabled = false;
+                                startBtn.innerText = '▶ Save & Run Queue';
+                                startBtn.style.opacity = '1';
+                                startBtn.style.cursor = 'pointer';
+                                if (statusText && statusText.innerText === 'Extension Offline') statusText.innerText = 'Not Started';
+                            }
+                        }
+                    }
                     // === Debug UI Bridge - Execute actions in the WebView ===
                     if (msg.command === 'executeDebugUIAction') {
                         const action = msg.action || {};
@@ -1990,6 +2021,7 @@ class SettingsPanel {
                 vscode.postMessage({ command: 'getSchedule' });
                 vscode.postMessage({ command: 'getConversations' });
                 vscode.postMessage({ command: 'getPromptHistory' });
+                vscode.postMessage({ command: 'getExtensionState' });
                 requestLogs();
                 updateModeVisibility(); // Apply default mode visibility
             </script>
