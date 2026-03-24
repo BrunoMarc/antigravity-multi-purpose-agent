@@ -27,87 +27,97 @@
 (function (exports) {
     'use strict';
 
-     // Environment detection: CDP injection runs in Electron's browser context where
-     // both process and window exist. Prefer the browser path (window globals) when
-     // window is available, since sub-modules export to window in browser.
-     const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
-     const isNode = typeof process !== 'undefined' && process.versions && process.versions.node && !isBrowser;
+    // ==========================================
+    // STATE MANAGEMENT
+    // ==========================================
 
-     // ==========================================
-     // STATE MANAGEMENT (delegates to state module)
-     // ==========================================
-
-     // Import state management functions
-     let stateModule = {};
-     if (isNode) {
-         try {
-             stateModule = require('./state');
-         } catch (e) {
-             console.warn('[Analytics] state module not available:', e.message);
-         }
-     }
-      const { initializeState, getStats, getStatsMutable } = 
-          isNode ? stateModule : (isBrowser ? window : {});
-
-     // ==========================================
-     // CLICK TRACKING
-     // ==========================================
-
-    // Import from clicks tracker module (with error handling)
-    let clicksModule = {};
-    if (isNode) {
-        try {
-            clicksModule = require('./trackers/clicks');
-        } catch (e) {
-            // Module not available in Node environment, use fallback
-            console.warn('[Analytics] clicks module not available:', e.message);
-        }
+    function createDefaultStats() {
+        return {
+            clicksThisSession: 0,
+            blockedThisSession: 0,
+            sessionStartTime: null,
+            fileEditsThisSession: 0,
+            terminalCommandsThisSession: 0,
+            actionsWhileAway: 0,
+            isWindowFocused: true,
+            lastConversationUrl: null,
+            lastConversationStats: null
+        };
     }
-    const { ActionType, categorizeClick } = isNode ? clicksModule : (isBrowser ? window : {});
+
+    function getStats() {
+        return window.__autoAcceptState?.stats || createDefaultStats();
+    }
+
+    function getStatsMutable() {
+        return window.__autoAcceptState.stats;
+    }
+
+    // ==========================================
+    // CLICK TRACKING
+    // ==========================================
+
+    const ActionType = {
+        FILE_EDIT: 'file_edit',
+        TERMINAL_COMMAND: 'terminal_command'
+    };
+
+    const TERMINAL_KEYWORDS = ['run', 'execute', 'command', 'terminal'];
+
+    function categorizeClick(buttonText) {
+        const text = (buttonText || '').toLowerCase();
+        for (const keyword of TERMINAL_KEYWORDS) {
+            if (text.includes(keyword)) {
+                return ActionType.TERMINAL_COMMAND;
+            }
+        }
+        return ActionType.FILE_EDIT;
+    }
 
     /**
      * Track a button click with full categorization and away detection.
-     *
+     * 
      * @param {string} buttonText - Text of the clicked button
      * @param {Function} log - Logger function
      * @returns {Object} Click metadata
      */
     function trackClick(buttonText, log) {
         const stats = getStatsMutable();
-        let result;
-        if (isNode && clicksModule.trackClick) {
-            result = clicksModule.trackClick(stats, buttonText, log);
-        } else if (isBrowser && window.trackClick) {
-            result = window.trackClick(stats, buttonText, log);
+
+        // Increment total clicks
+        stats.clicksThisSession++;
+        log(`[Stats] Click tracked. Total: ${stats.clicksThisSession}`);
+
+        // Categorize
+        const category = categorizeClick(buttonText);
+        if (category === ActionType.TERMINAL_COMMAND) {
+            stats.terminalCommandsThisSession++;
+            log(`[Stats] Terminal command. Total: ${stats.terminalCommandsThisSession}`);
         } else {
-            // Fallback implementation
-            stats.clicksThisSession++;
-            log(`[Stats] Click tracked. Total: ${stats.clicksThisSession}`);
-            const category = categorizeClick ? categorizeClick(buttonText) : 'unknown';
-            result = { category, isAway: !stats.isWindowFocused, totalClicks: stats.clicksThisSession };
+            stats.fileEditsThisSession++;
+            log(`[Stats] File edit. Total: ${stats.fileEditsThisSession}`);
         }
-        return {
-            ...result,
-            totalClicks: stats.clicksThisSession
-        };
+
+        // Away tracking
+        let isAway = false;
+        if (!stats.isWindowFocused) {
+            stats.actionsWhileAway++;
+            isAway = true;
+            log(`[Stats] Away action. Total away: ${stats.actionsWhileAway}`);
+        }
+
+        return { category, isAway, totalClicks: stats.clicksThisSession };
     }
 
     /**
      * Track a blocked command.
-     *
+     * 
      * @param {Function} log - Logger function
      */
     function trackBlocked(log) {
         const stats = getStatsMutable();
-        if (isNode && clicksModule.trackBlocked) {
-            return clicksModule.trackBlocked(stats, log);
-        } else if (isBrowser && window.trackBlocked) {
-            return window.trackBlocked(stats, log);
-        } else {
-            // Fallback implementation
-            stats.blockedThisSession++;
-            log(`[Stats] Blocked. Total: ${stats.blockedThisSession}`);
-        }
+        stats.blockedThisSession++;
+        log(`[Stats] Blocked. Total: ${stats.blockedThisSession}`);
     }
 
     // ==========================================
@@ -117,7 +127,7 @@
     /**
      * Collect and reset ROI stats for weekly aggregation.
      * Preserves UX notification counters.
-     *
+     * 
      * @param {Function} log - Logger function
      * @returns {Object} Collected stats
      */
@@ -139,45 +149,18 @@
         return collected;
     }
 
-     // ==========================================
-     // SESSION SUMMARY
-     // ==========================================
-
-     // Import focus management functions
-     let focusModule = {};
-     if (isNode) {
-         try {
-             focusModule = require('./focus');
-         } catch (e) {
-             console.warn('[Analytics] focus module not available:', e.message);
-         }
-     }
-     const { dispatchUserReturnedEvent } = 
-         isNode ? focusModule : (isBrowser ? window : {});
+    // ==========================================
+    // SESSION SUMMARY
+    // ==========================================
 
     /**
      * Get session summary for end-of-session notifications.
-     *
+     * 
      * @returns {Object} Session summary with time estimates
      */
     function getSessionSummary() {
         const stats = getStats();
-        
-        if (isNode) {
-            try {
-                return require('./reporters/session').getSessionSummary(stats);
-            } catch (e) {
-                // Fallback to inline implementation
-            }
-        } else if (isBrowser && window.getSessionSummary) {
-            return window.getSessionSummary(stats);
-        }
-        
-        // Fallback implementation if module not available
         const clicks = stats.clicksThisSession || 0;
-        const fileEdits = stats.fileEditsThisSession || 0;
-        const terminalCommands = stats.terminalCommandsThisSession || 0;
-        const blocked = stats.blockedThisSession || 0;
 
         const baseSecs = clicks * 5;
         const minMins = Math.max(1, Math.floor((baseSecs * 0.8) / 60));
@@ -185,11 +168,10 @@
 
         return {
             clicks,
-            fileEdits,
-            terminalCommands,
-            blocked,
-            estimatedTimeSaved: clicks > 0 ? `${minMins}–${maxMins}` : null,
-            hasActivity: clicks > 0 || blocked > 0
+            fileEdits: stats.fileEditsThisSession || 0,
+            terminalCommands: stats.terminalCommandsThisSession || 0,
+            blocked: stats.blockedThisSession || 0,
+            estimatedTimeSaved: clicks > 0 ? `${minMins}–${maxMins}` : null
         };
     }
 
@@ -199,7 +181,7 @@
 
     /**
      * Get and reset away actions counter.
-     *
+     * 
      * @param {Function} log - Logger function
      * @returns {number} Actions performed while away
      */
@@ -213,7 +195,7 @@
 
     /**
      * Check if user is currently away (window not focused).
-     *
+     * 
      * @returns {boolean} True if window not focused
      */
     function isUserAway() {
@@ -224,88 +206,95 @@
     // FOCUS MANAGEMENT
     // ==========================================
 
+    let focusListenersAttached = false;
+
     /**
-     * Setup focus/blur listeners (delegates to focus manager module).
-     *
+     * Setup focus/blur listeners.
+     * 
      * @param {Function} log - Logger function
      */
     function setupFocusListeners(log) {
-        const stats = getStatsMutable();
-        
-        if (isNode) {
-            // Import focus module with error handling
-            let focusModule;
-            try {
-                focusModule = require('./focus');
-            } catch (e) {
-                log('[Focus] Focus manager module not available:', e.message);
-                return;
+        if (typeof window === 'undefined') return;
+        if (focusListenersAttached) return;
+
+        log('[Focus] Setting up listeners...');
+
+        const handleFocusChange = (isFocused, source) => {
+            const state = window.__autoAcceptState;
+            if (!state || !state.stats) return;
+
+            const wasAway = !state.stats.isWindowFocused;
+            state.stats.isWindowFocused = isFocused;
+
+            log(`[Focus] ${source}: focused=${isFocused}, wasAway=${wasAway}`);
+
+            if (isFocused && wasAway) {
+                const awayActions = state.stats.actionsWhileAway || 0;
+                log(`[Focus] User returned! awayActions=${awayActions}`);
+                if (awayActions > 0) {
+                    window.dispatchEvent(new CustomEvent('autoAcceptUserReturned', {
+                        detail: { actionsWhileAway: awayActions }
+                    }));
+                }
             }
-            if (focusModule && focusModule.setupFocusListeners) {
-                focusModule.setupFocusListeners(stats, log, dispatchUserReturnedEvent);
-            }
-        } else if (isBrowser && window.setupFocusListeners) {
-            window.setupFocusListeners(stats, log, dispatchUserReturnedEvent);
+        };
+
+        window.addEventListener('focus', () => handleFocusChange(true, 'window-focus'));
+        window.addEventListener('blur', () => handleFocusChange(false, 'window-blur'));
+        document.addEventListener('visibilitychange', () =>
+            handleFocusChange(!document.hidden, 'visibility-change')
+        );
+
+        handleFocusChange(!document.hidden, 'init');
+        focusListenersAttached = true;
+        log('[Focus] Listeners registered');
+    }
+
+    // ==========================================
+    // INITIALIZATION
+    // ==========================================
+
+    /**
+     * Initialize the analytics system.
+     * Call this when the CDP script loads.
+     * 
+     * @param {Function} log - Logger function
+     */
+    function initialize(log) {
+        // Initialize state
+        if (!window.__autoAcceptState) {
+            window.__autoAcceptState = {
+                isRunning: false,
+                tabNames: [],
+                sessionID: 0,
+                currentMode: null,
+                startTimes: {},
+                bannedCommands: [],
+                stats: createDefaultStats()
+            };
+            log('[Analytics] State initialized');
+        } else if (!window.__autoAcceptState.stats) {
+            window.__autoAcceptState.stats = createDefaultStats();
+            log('[Analytics] Stats added to existing state');
         } else {
-            log('[Focus] Focus manager module not available');
+            // Migrate existing stats
+            const s = window.__autoAcceptState.stats;
+            if (s.actionsWhileAway === undefined) s.actionsWhileAway = 0;
+            if (s.isWindowFocused === undefined) s.isWindowFocused = true;
+            if (s.fileEditsThisSession === undefined) s.fileEditsThisSession = 0;
+            if (s.terminalCommandsThisSession === undefined) s.terminalCommandsThisSession = 0;
         }
-    }
 
-    /**
-     * Set focus state (called from extension via CDP).
-     *
-     * @param {boolean} isFocused - Whether the window is focused
-     * @param {Function} log - Logger function
-     */
-    function setFocusState(isFocused, log) {
-        const stats = getStatsMutable();
-        if (!stats) return;
+        // Setup focus listeners
+        setupFocusListeners(log);
 
-        const wasAway = !stats.isWindowFocused;
-        stats.isWindowFocused = isFocused;
-
-        if (log) {
-            log(`[Focus] Extension sync: focused=${isFocused}, wasAway=${wasAway}`);
+        // Initialize session start time
+        if (!window.__autoAcceptState.stats.sessionStartTime) {
+            window.__autoAcceptState.stats.sessionStartTime = Date.now();
         }
+
+        log('[Analytics] Initialized successfully');
     }
-
-    /**
-     * Mark DOM activity (for future features).
-     *
-     * @param {number} timestamp - Time of DOM activity
-     * @param {Function} log - Logger function
-     */
-    function markDomActivity(timestamp, log) {
-        const state = (typeof window !== 'undefined') ? window.__autoAcceptState : global.__autoAcceptState;
-        if (state) {
-            state.lastDomActivityTime = timestamp;
-            log(`[Analytics] DOM activity marked at ${timestamp}`);
-        }
-    }
-
-     // ==========================================
-     // INITIALIZATION
-     // ==========================================
-
-     /**
-      * Initialize the analytics system.
-      * Call this when the CDP script loads.
-      *
-      * @param {Function} log - Logger function
-      */
-     function initialize(log) {
-         // Initialize state using state module
-         initializeState(log);
-
-         // Setup focus listeners (only in browser)
-         if (isBrowser) {
-             setupFocusListeners(log);
-         }
-
-
-
-         log('[Analytics] Initialized successfully');
-     }
 
     // ==========================================
     // EXPORTS
@@ -336,23 +325,15 @@
         getStats,
 
         // Focus
-        setupFocusListeners,
-        setFocusState,
-
-        // DOM activity
-        markDomActivity
+        setupFocusListeners
     };
 
     // Also expose individual functions for backwards compatibility
     exports.trackClick = trackClick;
     exports.trackBlocked = trackBlocked;
-    exports.categorizeClick = categorizeClick;
-    exports.ActionType = ActionType;
     exports.collectROI = collectROI;
     exports.getSessionSummary = getSessionSummary;
     exports.consumeAwayActions = consumeAwayActions;
     exports.initialize = initialize;
-    exports.setFocusState = setFocusState;
-    exports.markDomActivity = markDomActivity;
 
 })(typeof module !== 'undefined' && module.exports ? module.exports : window);

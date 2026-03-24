@@ -1,239 +1,172 @@
 {
-    "name": "multi-purpose-agent",
-    "displayName": "Multi Purpose Agent",
-    "description": "Multi Purpose Agent: Automated Antigravity workflow.",
-    "version": "1.0.2",
-    "publisher": "Rodhayl",
-    "icon": "media/icon.png",
-    "repository": {
-        "type": "git",
-        "url": "https://github.com/rodhayl/antigravity-multi-purpose-agent/"
-    },
-    "categories": [
-        "Machine Learning",
-        "Other"
-    ],
-    "keywords": [
-        "antigravity",
-        "ai",
-        "auto-accept"
-    ],
-    "scripts": {
-        "test": "node tests/scheduler.test.js && node tests/test_analytics_module.js && node tests/banned_commands_test.js && node tests/vscode-command-strategy.test.js && node tests/cdp-strategy.test.js && node tests/safety-filter.test.js && node tests/hybrid-auto-accept.test.js && node tests/debug-handler.test.js",
-        "compile": "esbuild extension.js --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
-        "vscode:prepublish": "npm run compile",
-        "package": "npx vsce package"
-    },
-    "engines": {
-        "vscode": "^1.75.0",
-        "node": ">=18.0.0"
-    },
-    "activationEvents": [
-        "onStartupFinished"
-    ],
-    "main": "dist/extension.js",
-    "contributes": {
-        "commands": [
-            {
-                "command": "auto-accept.toggle",
-                "title": "Multi Purpose: Toggle ON/OFF"
-            },
-            {
-                "command": "auto-accept.openSettings",
-                "title": "Multi Purpose: Settings"
-            },
-            {
-                "command": "auto-accept.checkAntigravityStatus",
-                "title": "Multi Purpose: Antigravity Status"
-            },
-            {
-                "command": "auto-accept.getAntigravityQuota",
-                "title": "Multi Purpose: View Quota"
-            },
-            {
-                "command": "auto-accept.debugCommand",
-                "title": "Multi Purpose: Execute Debug Command"
-            }
-        ],
-        "configuration": {
-            "title": "Multi Purpose Agent",
-            "properties": {
-                "auto-accept.schedule.enabled": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Enable scheduled prompts to keep the agent active."
-                },
-                "auto-accept.schedule.mode": {
-                    "type": "string",
-                    "enum": [
-                        "interval",
-                        "daily",
-                        "queue"
-                    ],
-                    "default": "interval",
-                    "description": "Mode for scheduled prompts: 'interval' (every X minutes), 'daily' (at specific time), or 'queue' (sequential execution)."
-                },
-                "auto-accept.schedule.value": {
-                    "type": "string",
-                    "default": "30",
-                    "description": "Value for schedule: Minutes for 'interval' mode (e.g. '30') or HH:MM for 'daily' mode (e.g. '17:00')."
-                },
-                "auto-accept.schedule.prompt": {
-                    "type": "string",
-                    "default": "Status report please",
-                    "description": "The prompt text to send periodically (interval/daily modes)."
-                },
-                "auto-accept.schedule.prompts": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "default": [],
-                    "description": "Queue of prompts to execute sequentially (queue mode)."
-                },
-                "auto-accept.schedule.queueMode": {
-                    "type": "string",
-                    "enum": [
-                        "consume",
-                        "loop"
-                    ],
-                    "default": "consume",
-                    "description": "Queue behavior: 'consume' removes prompts after use, 'loop' cycles through them."
-                },
-                "auto-accept.schedule.silenceTimeout": {
-                    "type": "number",
-                    "default": 30,
-                    "minimum": 10,
-                    "maximum": 300,
-                    "description": "Seconds of no activity before considering a task complete and advancing the queue."
-                },
-                "auto-accept.schedule.checkPrompt.enabled": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Enable intermediate check prompts between scheduled tasks."
-                },
-                "auto-accept.schedule.checkPrompt.text": {
-                    "type": "string",
-                    "default": "Make sure that the previous task was implemented fully as per requirements, implement all gaps, fix all bugs and test everything. Make sure that you reused existing code where possible instead of duplicating code. ultrathink internally avoiding verbosity.",
-                    "description": "The check prompt text to send after each task."
-                },
-                "auto-accept.antigravityQuota.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Show Antigravity quota status in the status bar. Displays remaining model quotas and credits."
-                },
-                "auto-accept.antigravityQuota.pollInterval": {
-                    "type": "number",
-                    "default": 60,
-                    "minimum": 30,
-                    "maximum": 600,
-                    "description": "How often to refresh quota information (in seconds)."
-                },
-                "auto-accept.antigravityQuota.resume.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Automatically resume the prompt queue when quota becomes available."
-                },
-                "auto-accept.autoContinue.enabled": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Automatically send 'Continue' to the chat when quota refreshes or job is paused."
-                },
-                "auto-accept.cdpPort": {
-                    "type": "number",
-                    "default": 9004,
-                    "minimum": 1024,
-                    "maximum": 65535,
-                    "description": "The Chrome DevTools Protocol port used for browser automation. Must match the --remote-debugging-port flag used when launching Antigravity."
-                },
-                "auto-accept.debugMode.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Enable debug mode for AI agent programmatic control of all extension features via the debugCommand."
-                },
-                "auto-accept.domActivityTracking.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Use DOM MutationObserver to detect AI activity for more accurate silence detection in queue mode."
-                },
-                "auto-accept.continue.autoClickOnOpenOrStart": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Automatically click Continue when opening a conversation or starting the queue."
-                },
-                "auto-accept.continue.policy": {
-                    "type": "string",
-                    "enum": [
-                        "auto",
-                        "ask"
-                    ],
-                    "default": "auto",
-                    "description": "Policy for Continue button auto-click: 'auto' clicks automatically, 'ask' waits for user."
-                },
-                "auto-accept.hybrid.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Enable hybrid auto-accept combining VS Code commands (primary) with CDP fallback."
-                },
-                "auto-accept.hybrid.primaryStrategy.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Enable VS Code command polling as primary auto-accept strategy."
-                },
-                "auto-accept.hybrid.primaryStrategy.pollInterval": {
-                    "type": "number",
-                    "default": 500,
-                    "minimum": 100,
-                    "maximum": 5000,
-                    "description": "Polling interval in ms for VS Code command strategy."
-                },
-                "auto-accept.hybrid.fallbackStrategy.enabled": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Enable CDP DOM clicking as fallback auto-accept strategy."
-                },
-                "auto-accept.hybrid.fallbackStrategy.pollInterval": {
-                    "type": "number",
-                    "default": 1500,
-                    "minimum": 500,
-                    "maximum": 10000,
-                    "description": "Polling interval in ms for CDP fallback strategy."
-                },
-                "auto-accept.hybrid.fallbackStrategy.useDataTestId": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Use data-testid selectors for i18n-safe targeting in CDP fallback."
-                },
-                "auto-accept.hybrid.safety.bannedCommands": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "default": [],
-                    "description": "Additional banned command patterns for hybrid auto-accept safety filter."
-                },
-                "auto-accept.hybrid.safety.excludedCommands": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "default": [],
-                    "description": "Additional excluded commands for hybrid auto-accept safety filter."
-                },
-                "auto-accept.hybrid.safety.requireVisibility": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Require element visibility check before auto-accept actions."
-                }
-            }
-        }
-    },
-    "dependencies": {
-        "ws": "^8.13.0"
-    },
-    "devDependencies": {
-        "esbuild": "^0.27.1",
-        "eslint": "^10.0.1",
-        "jscpd": "^4.0.8"
-    }
+	"name": "multi-purpose-agent",
+	"displayName": "Multi Purpose Agent",
+	"description": "Multi Purpose Agent: Automated Antigravity workflow.",
+	"version": "999.0.0",
+	"publisher": "Rodhayl",
+	"icon": "media/icon.png",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/rodhayl/antigravity-multi-purpose-agent/"
+	},
+	"categories": [
+		"Machine Learning",
+		"Other"
+	],
+	"keywords": [
+		"antigravity",
+		"ai",
+		"auto-accept"
+	],
+	"scripts": {
+		"test": "node tests/scheduler.test.js",
+		"compile": "esbuild extension.js --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
+		"vscode:prepublish": "npm run compile",
+		"package": "npx vsce package"
+	},
+	"engines": {
+		"vscode": "^1.75.0"
+	},
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "dist/extension.js",
+	"contributes": {
+		"commands": [
+			{
+				"command": "auto-accept.toggle",
+				"title": "Multi Purpose: Toggle ON/OFF"
+			},
+			{
+				"command": "auto-accept.openSettings",
+				"title": "Multi Purpose: Settings"
+			},
+			{
+				"command": "auto-accept.checkAntigravityStatus",
+				"title": "Multi Purpose: Antigravity Status"
+			},
+			{
+				"command": "auto-accept.getAntigravityQuota",
+				"title": "Multi Purpose: View Quota"
+			},
+			{
+				"command": "auto-accept.debugCommand",
+				"title": "Multi Purpose: Execute Debug Command"
+			}
+		],
+		"configuration": {
+			"title": "Multi Purpose Agent",
+			"properties": {
+				"auto-accept.schedule.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable scheduled prompts to keep the agent active."
+				},
+				"auto-accept.schedule.mode": {
+					"type": "string",
+					"enum": [
+						"interval",
+						"daily",
+						"queue"
+					],
+					"default": "interval",
+					"description": "Mode for scheduled prompts: 'interval' (every X minutes), 'daily' (at specific time), or 'queue' (sequential execution)."
+				},
+				"auto-accept.schedule.value": {
+					"type": "string",
+					"default": "30",
+					"description": "Value for schedule: Minutes for 'interval' mode (e.g. '30') or HH:MM for 'daily' mode (e.g. '17:00')."
+				},
+				"auto-accept.schedule.prompt": {
+					"type": "string",
+					"default": "Continue a implementação do loop de evolução autônomo e teste os geradores. Se tudo passou, faça o commit.",
+					"description": "The prompt text to send periodically (interval/daily modes)."
+				},
+				"auto-accept.schedule.prompts": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Queue of prompts to execute sequentially (queue mode)."
+				},
+				"auto-accept.schedule.queueMode": {
+					"type": "string",
+					"enum": [
+						"consume",
+						"loop"
+					],
+					"default": "consume",
+					"description": "Queue behavior: 'consume' removes prompts after use, 'loop' cycles through them."
+				},
+				"auto-accept.schedule.silenceTimeout": {
+					"type": "number",
+					"default": 120,
+					"minimum": 10,
+					"maximum": 600,
+					"description": "Seconds of no activity before considering a task complete and advancing the queue."
+				},
+				"auto-accept.schedule.checkPrompt.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable intermediate check prompts between scheduled tasks."
+				},
+				"auto-accept.schedule.checkPrompt.text": {
+					"type": "string",
+					"default": "Verifique a implementação atual usando testes e lint. Se estiver com erros, corrija-os. Se o resultado for sucesso absoluto, faça o commit sem push (git commit -am \"chore: auto-checkpoint\") e siga imediatamente para o próximo passo do Handoff / Loop de Evolução Autônomo.",
+					"description": "The check prompt text to send after each task."
+				},
+				"auto-accept.fallbackModel": {
+					"type": "string",
+					"default": "gemini 3.1",
+					"description": "Fallback model to switch to automatically when the primary quota is exhausted. Leave empty to disable."
+				},
+				"auto-accept.antigravityQuota.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show Antigravity quota status in the status bar. Displays remaining model quotas and credits."
+				},
+				"auto-accept.antigravityQuota.pollInterval": {
+					"type": "number",
+					"default": 60,
+					"minimum": 30,
+					"maximum": 600,
+					"description": "How often to refresh quota information (in seconds)."
+				},
+				"auto-accept.antigravityQuota.resume.enabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "Automatically resume the prompt queue when quota becomes available."
+				},
+				"auto-accept.autoContinue.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Automatically send 'Continue' to the chat when quota refreshes or job is paused."
+				},
+				"auto-accept.cdpPort": {
+					"type": "number",
+					"default": 9004,
+					"minimum": 1024,
+					"maximum": 65535,
+					"description": "The Chrome DevTools Protocol port used for browser automation. Must match the --remote-debugging-port flag used when launching Antigravity."
+				},
+				"auto-accept.debugMode.enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Enable debug mode for AI agent programmatic control of all extension features via the debugCommand."
+				}
+			}
+		}
+	},
+	"dependencies": {
+		"ws": "^8.13.0"
+	},
+	"devDependencies": {
+		"esbuild": "^0.27.1"
+	},
+	"__metadata": {
+		"installedTimestamp": 1774149000107,
+		"targetPlatform": "undefined",
+		"size": 1064633
+	}
 }

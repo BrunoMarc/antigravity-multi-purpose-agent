@@ -87,11 +87,4 @@ function trackBlocked(stats, log) {
 // Export for browser (IIFE) or Node.js (testing)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { ActionType, categorizeClick, trackClick, trackBlocked, TERMINAL_KEYWORDS };
-} else if (typeof window !== 'undefined') {
-    // Expose for browser injection
-    window.ActionType = ActionType;
-    window.categorizeClick = categorizeClick;
-    window.trackClick = trackClick;
-    window.trackBlocked = trackBlocked;
-    window.TERMINAL_KEYWORDS = TERMINAL_KEYWORDS;
 }

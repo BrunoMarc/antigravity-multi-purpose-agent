@@ -1,7 +1,7 @@
 /**
  * Analytics State Module
  * Handles initialization and migration of analytics state.
- *
+ * 
  * @module analytics/state
  */
 
@@ -14,7 +14,7 @@ function createDefaultStats() {
         // Core ROI metrics (reset every collection cycle)
         clicksThisSession: 0,
         blockedThisSession: 0,
-        sessionStartTime: Date.now(),
+        sessionStartTime: null,
 
         // Detailed breakdown (reset when session summary is shown)
         fileEditsThisSession: 0,
@@ -31,26 +31,21 @@ function createDefaultStats() {
 }
 
 /**
- * Initialize analytics state.
- * Handles both browser and Node.js environments.
+ * Initialize analytics state on the window object.
  * Creates a fresh state if none exists, or migrates existing state.
- *
+ * 
  * @param {Object} log - Logger function
  */
 function initializeState(log) {
-    const globalObj = typeof window !== 'undefined' ? window : global;
-    
-    if (!globalObj.__autoAcceptState) {
-        globalObj.__autoAcceptState = {
+    if (!window.__autoAcceptState) {
+        window.__autoAcceptState = {
             isRunning: false,
             tabNames: [],
             sessionID: 0,
             currentMode: null,
             startTimes: {},
             bannedCommands: [],
-            stats: createDefaultStats(),
-            lastDomActivityTime: 0,
-            domActivityObserver: null
+            stats: createDefaultStats()
         };
         log('[Analytics] Fresh state initialized');
     } else {
@@ -61,13 +56,11 @@ function initializeState(log) {
 /**
  * Migrate existing state to include any new fields.
  * Ensures backwards compatibility when updating the extension.
- * Handles both browser and Node.js environments.
- *
+ * 
  * @param {Object} log - Logger function
  */
 function migrateState(log) {
-    const globalObj = typeof window !== 'undefined' ? window : global;
-    const state = globalObj.__autoAcceptState;
+    const state = window.__autoAcceptState;
 
     // Ensure stats object exists
     if (!state.stats) {
@@ -97,16 +90,6 @@ function migrateState(log) {
         migrated = true;
     }
 
-    // Ensure DOM activity state exists
-    if (state.lastDomActivityTime === undefined) {
-        state.lastDomActivityTime = 0;
-        migrated = true;
-    }
-    if (state.domActivityObserver === undefined) {
-        state.domActivityObserver = null;
-        migrated = true;
-    }
-
     if (migrated) {
         log('[Analytics] Migrated state to include new fields');
     }
@@ -114,35 +97,21 @@ function migrateState(log) {
 
 /**
  * Get the current stats object (read-only snapshot).
- * Handles both browser and Node.js environments.
  * @returns {Object} Current stats
  */
 function getStats() {
-    const globalObj = typeof window !== 'undefined' ? window : global;
-    return globalObj.__autoAcceptState?.stats || createDefaultStats();
+    return window.__autoAcceptState?.stats || createDefaultStats();
 }
 
 /**
  * Get the mutable stats reference for trackers.
- * Handles both browser and Node.js environments.
  * @returns {Object} Stats reference
  */
 function getStatsMutable() {
-    const globalObj = typeof window !== 'undefined' ? window : global;
-    if (!globalObj.__autoAcceptState) {
-        globalObj.__autoAcceptState = { stats: createDefaultStats() };
-    }
-    return globalObj.__autoAcceptState.stats;
+    return window.__autoAcceptState.stats;
 }
 
 // Export for browser (IIFE) or Node.js (testing)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { createDefaultStats, initializeState, migrateState, getStats, getStatsMutable };
-} else if (typeof window !== 'undefined') {
-    // Expose for browser injection
-    window.createDefaultStats = createDefaultStats;
-    window.initializeState = initializeState;
-    window.migrateState = migrateState;
-    window.getStats = getStats;
-    window.getStatsMutable = getStatsMutable;
 }

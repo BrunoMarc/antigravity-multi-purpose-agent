@@ -76,10 +76,4 @@ function incrementAwayAction(stats) {
 // Export for browser (IIFE) or Node.js (testing)
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { setFocusState, didUserReturn, getAwayActionsCount, consumeAwayActions, incrementAwayAction };
-} else if (typeof window !== 'undefined') {
-    window.setFocusState = setFocusState;
-    window.didUserReturn = didUserReturn;
-    window.getAwayActionsCount = getAwayActionsCount;
-    window.consumeAwayActions = consumeAwayActions;
-    window.incrementAwayAction = incrementAwayAction;
 }

@@ -1,7 +1,6 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { getLatestCdpLogPath } = require('./utils');
 let globalWarningDampener = 0; // Global rate limiter for warnings
 
 class SettingsPanel {
@@ -79,9 +78,6 @@ class SettingsPanel {
                         if (message.silenceTimeout !== undefined) {
                             await config.update('silenceTimeout', message.silenceTimeout, vscode.ConfigurationTarget.Global);
                         }
-                        if (message.domActivityTrackingEnabled !== undefined) {
-                            await vscode.workspace.getConfiguration('auto-accept.domActivityTracking').update('enabled', message.domActivityTrackingEnabled, vscode.ConfigurationTarget.Global);
-                        }
                         if (message.checkPromptEnabled !== undefined) {
                             await config.update('checkPrompt.enabled', message.checkPromptEnabled, vscode.ConfigurationTarget.Global);
                         }
@@ -96,12 +92,12 @@ class SettingsPanel {
                         }
                         break;
 
-                    case 'saveAndStartQueue': {
+                    case 'saveAndStartQueue':
                         // 1. Update Schedule first (Synchronously await)
                         const configToSave = vscode.workspace.getConfiguration('auto-accept.schedule');
                         const scheduleData = message.schedule || {};
 
-                        console.log('[Extension] Received saveAndStartQueue command', scheduleData);
+                        console.log('[Extension] Received saveAndStartQueue command', scheduleData); // DEBUG LOG ADDED
 
                         // DEFENSIVE CHECK: Don't start if prompts are empty
                         if (!scheduleData.prompts || scheduleData.prompts.length === 0) {
@@ -118,35 +114,21 @@ class SettingsPanel {
                             return;
                         }
 
-                        // Save all schedule settings — wrapped in try-catch so a failing
-                        // non-critical config write cannot prevent the queue from starting.
-                        try {
-                            await configToSave.update('enabled', true, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.mode) await configToSave.update('mode', scheduleData.mode, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.value) await configToSave.update('value', scheduleData.value, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.prompts) await configToSave.update('prompts', scheduleData.prompts, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.queueMode) await configToSave.update('queueMode', scheduleData.queueMode, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.silenceTimeout) await configToSave.update('silenceTimeout', scheduleData.silenceTimeout, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.checkPromptEnabled !== undefined) await configToSave.update('checkPrompt.enabled', scheduleData.checkPromptEnabled, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.checkPromptText !== undefined) await configToSave.update('checkPrompt.text', scheduleData.checkPromptText, vscode.ConfigurationTarget.Global);
-                        } catch (e) {
-                            console.error('[Extension] Error saving core schedule config:', e);
-                        }
-
-                        // Non-critical settings (declared outside auto-accept.schedule)
-                        try {
-                            if (scheduleData.domActivityTrackingEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.domActivityTracking').update('enabled', scheduleData.domActivityTrackingEnabled, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.resumeEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.antigravityQuota.resume').update('enabled', scheduleData.resumeEnabled, vscode.ConfigurationTarget.Global);
-                            if (scheduleData.autoContinueEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.autoContinue').update('enabled', scheduleData.autoContinueEnabled, vscode.ConfigurationTarget.Global);
-                        } catch (e) {
-                            console.error('[Extension] Error saving auxiliary config (non-fatal):', e);
-                        }
+                        await configToSave.update('enabled', true, vscode.ConfigurationTarget.Global); // Ensure enabled
+                        if (scheduleData.mode) await configToSave.update('mode', scheduleData.mode, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.value) await configToSave.update('value', scheduleData.value, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.prompts) await configToSave.update('prompts', scheduleData.prompts, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.queueMode) await configToSave.update('queueMode', scheduleData.queueMode, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.silenceTimeout) await configToSave.update('silenceTimeout', scheduleData.silenceTimeout, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.checkPromptEnabled !== undefined) await configToSave.update('checkPrompt.enabled', scheduleData.checkPromptEnabled, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.checkPromptText !== undefined) await configToSave.update('checkPrompt.text', scheduleData.checkPromptText, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.resumeEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.antigravityQuota.resume').update('enabled', scheduleData.resumeEnabled, vscode.ConfigurationTarget.Global);
+                        if (scheduleData.autoContinueEnabled !== undefined) await vscode.workspace.getConfiguration('auto-accept.autoContinue').update('enabled', scheduleData.autoContinueEnabled, vscode.ConfigurationTarget.Global);
 
                         // 2. Start Queue
-                        console.log('[Extension] Executing auto-accept.startQueue command');
-                        await vscode.commands.executeCommand('auto-accept.startQueue', { source: 'manual' });
+                        console.log('[Extension] Executing auto-accept.startQueue command'); // DEBUG LOG ADDED
+                        vscode.commands.executeCommand('auto-accept.startQueue', { source: 'manual' });
                         break;
-                    }
                     case 'getSchedule':
                         this.sendSchedule();
                         break;
@@ -161,7 +143,7 @@ class SettingsPanel {
                             vscode.window.showWarningMessage('Multi Purpose: Prompt queue is empty. Add prompts first.');
                             return;
                         }
-                        await vscode.commands.executeCommand('auto-accept.startQueue', { source: 'manual' });
+                        vscode.commands.executeCommand('auto-accept.startQueue', { source: 'manual' });
                         break;
                     case 'setResumeEnabled': {
                         const resumeConfig = vscode.workspace.getConfiguration('auto-accept.antigravityQuota.resume');
@@ -234,32 +216,6 @@ class SettingsPanel {
                     case 'getCdpPort':
                         this.sendCdpPort();
                         break;
-                    case 'setHybridSettings': {
-                        const hybridConfig = vscode.workspace.getConfiguration('auto-accept.hybrid');
-                        await hybridConfig.update('enabled', message.hybridEnabled, vscode.ConfigurationTarget.Global);
-                        await hybridConfig.update('primaryStrategy.enabled', message.vscodeEnabled, vscode.ConfigurationTarget.Global);
-                        await hybridConfig.update('primaryStrategy.pollInterval', message.vscodePollInterval, vscode.ConfigurationTarget.Global);
-                        await hybridConfig.update('fallbackStrategy.enabled', message.cdpEnabled, vscode.ConfigurationTarget.Global);
-                        await hybridConfig.update('fallbackStrategy.pollInterval', message.cdpPollInterval, vscode.ConfigurationTarget.Global);
-                        break;
-                    }
-                    case 'getHybridSettings':
-                        this.sendHybridSettings();
-                        break;
-                    case 'setContinueSettings': {
-                        const continueConfig = vscode.workspace.getConfiguration('auto-accept.continue');
-                        await continueConfig.update('autoClickOnOpenOrStart', message.autoClickOnOpenOrStart, vscode.ConfigurationTarget.Global);
-                        await continueConfig.update('policy', message.policy, vscode.ConfigurationTarget.Global);
-                        break;
-                    }
-                    case 'getContinueSettings':
-                        this.sendContinueSettings();
-                        break;
-                    case 'setDomActivityTracking': {
-                        const domActivityCfg = vscode.workspace.getConfiguration('auto-accept.domActivityTracking');
-                        await domActivityCfg.update('enabled', !!message.value, vscode.ConfigurationTarget.Global);
-                        break;
-                    }
                     // === Debug UI Bridge for Testing ===
                     case 'debugUIAction':
                         this.handleDebugUIAction(message.action);
@@ -280,7 +236,7 @@ class SettingsPanel {
             sessions: 0,
             lastSession: null
         });
-        const frequency = this.context.globalState.get('auto-accept-frequency', 1000);
+        const frequency = this.context.globalState.get('auto-accept-frequency', 3000);
 
         this.panel.webview.postMessage({
             command: 'updateStats',
@@ -314,31 +270,6 @@ class SettingsPanel {
         this.panel.webview.postMessage({
             command: 'updateCdpPort',
             port: config.get('cdpPort', 9004)
-        });
-    }
-
-    sendHybridSettings() {
-        const config = vscode.workspace.getConfiguration('auto-accept.hybrid');
-        this.panel.webview.postMessage({
-            command: 'updateHybridSettings',
-            settings: {
-                hybridEnabled: config.get('enabled', true),
-                vscodeEnabled: config.get('primaryStrategy.enabled', true),
-                vscodePollInterval: config.get('primaryStrategy.pollInterval', 500),
-                cdpEnabled: config.get('fallbackStrategy.enabled', false),
-                cdpPollInterval: config.get('fallbackStrategy.pollInterval', 1500)
-            }
-        });
-    }
-
-    sendContinueSettings() {
-        const config = vscode.workspace.getConfiguration('auto-accept.continue');
-        this.panel.webview.postMessage({
-            command: 'updateContinueSettings',
-            settings: {
-                autoClickOnOpenOrStart: config.get('autoClickOnOpenOrStart', true),
-                policy: config.get('policy', 'auto')
-            }
         });
     }
 
@@ -376,7 +307,6 @@ class SettingsPanel {
                 prompts: config.get('prompts', []),
                 queueMode: config.get('queueMode', 'consume'),
                 silenceTimeout: config.get('silenceTimeout', 30),
-                domActivityTrackingEnabled: vscode.workspace.getConfiguration('auto-accept.domActivityTracking').get('enabled', true),
                 checkPromptEnabled: config.get('checkPrompt.enabled', false),
                 checkPromptText: config.get('checkPrompt.text', ''),
                 resumeEnabled: resumeConfig.get('enabled', true),
@@ -462,7 +392,41 @@ class SettingsPanel {
     }
 
     getLogFilePath() {
-        return getLatestCdpLogPath(this.context.extensionPath, { generateIfNotFound: true });
+        try {
+            const dir = this.context.extensionPath;
+            const entries = fs.readdirSync(dir);
+            const candidates = entries
+                .filter(name => name.startsWith('multi-purpose-cdp-') && name.endsWith('.log'))
+                .map(name => path.join(dir, name))
+                .filter(p => fs.existsSync(p));
+
+            if (candidates.length === 0) {
+                const d = new Date();
+                const pad2 = (n) => String(n).padStart(2, '0');
+                const suffix = `${pad2(d.getMinutes())}${pad2(d.getHours())}-${pad2(d.getDate())}${pad2(d.getMonth() + 1)}${pad2(d.getFullYear() % 100)}`;
+                return path.join(dir, `multi-purpose-cdp-${suffix}.log`);
+            }
+
+            let best = candidates[0];
+            let bestMtime = 0;
+            for (const p of candidates) {
+                try {
+                    const stat = fs.statSync(p);
+                    const mtime = stat.mtimeMs || 0;
+                    if (mtime >= bestMtime) {
+                        bestMtime = mtime;
+                        best = p;
+                    }
+                } catch (e) { }
+            }
+            return best;
+        } catch (e) {
+            const dir = this.context.extensionPath;
+            const d = new Date();
+            const pad2 = (n) => String(n).padStart(2, '0');
+            const suffix = `${pad2(d.getMinutes())}${pad2(d.getHours())}-${pad2(d.getDate())}${pad2(d.getMonth() + 1)}${pad2(d.getFullYear() % 100)}`;
+            return path.join(dir, `multi-purpose-cdp-${suffix}.log`);
+        }
     }
 
     readTail(filePath, { tailLines = 300, maxBytes = 250000 } = {}) {
@@ -951,7 +915,7 @@ class SettingsPanel {
                     <div>
                         <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
                             <span style="font-size: 12px; opacity: 0.5;">Instant</span>
-                            <div style="flex: 1;"><input type="range" id="freqSlider" min="200" max="3000" step="100" value="1000"></div>
+                            <div style="flex: 1;"><input type="range" id="freqSlider" min="200" max="60000" step="100" value="1000"></div>
                             <span style="font-size: 12px; opacity: 0.5;">Battery Saving</span>
                         </div>
                     </div>
@@ -978,8 +942,8 @@ class SettingsPanel {
                                         <option value="queue" selected>Queue (Sequential)</option>
                                     </select>
                                 </div>
-                                <div>
-                                    <label style="font-size: 11px; color: var(--fg-dim); display: block; margin-bottom: 4px;">Value / Timeout</label>
+                                <div id="scheduleValueContainer">
+                                    <label style="font-size: 11px; color: var(--fg-dim); display: block; margin-bottom: 4px;">Interval Value</label>
                                     <input type="text" id="scheduleValue" placeholder="30" style="width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg); padding: 10px 12px; border-radius: 10px;">
                                 </div>
                             </div>
@@ -1015,18 +979,8 @@ class SettingsPanel {
                                         </select>
                                     </div>
                                     <div>
-                                        <label style="font-size: 11px; color: var(--fg-dim); display: block; margin-bottom: 4px;">Silence Timeout (s)</label>
-                                        <input type="number" id="silenceTimeout" value="30" min="10" max="300" style="width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg); padding: 10px 12px; border-radius: 10px;">
-                                    </div>
-                                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 0;">
-                                        <div>
-                                            <span style="font-size: 12px;">DOM Activity Tracking</span>
-                                            <div style="font-size: 10px; color: var(--fg-dim);">Detect AI activity for better silence detection</div>
-                                        </div>
-                                        <label class="switch">
-                                            <input type="checkbox" id="domActivityTrackingEnabled" checked>
-                                            <span class="slider round"></span>
-                                        </label>
+                                        <label style="font-size: 11px; color: var(--fg-dim); display: block; margin-bottom: 4px;" title="Time to wait after the AI appears idle before sending the next prompt. Increase if the AI runs long terminal commands.">Idle Timeout (s)</label>
+                                        <input type="number" id="silenceTimeout" value="30" min="10" max="600" style="width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg); padding: 10px 12px; border-radius: 10px;">
                                     </div>
                                 </div>
                                 
@@ -1068,6 +1022,25 @@ class SettingsPanel {
                                     </div>
                                     <div style="font-size: 10px; color: var(--fg-dim); margin-top: 8px;">
                                         Automatically resumes the queue when your quota becomes available again.
+                                    </div>
+                                </div>
+                                
+                                <!-- Fallback Model -->
+                                <div style="background: rgba(255,255,255,0.03); border-radius: 12px; padding: 14px; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                                    <div style="margin-bottom: 8px;">
+                                        <span style="font-size: 12px; display: block; margin-bottom: 4px;">Fallback Model (Auto-Switch)</span>
+                                        <select id="fallbackModel" style="width: 100%; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg); padding: 8px 10px; border-radius: 6px; font-size: 11px;">
+                                            <option value="">Disabled (Wait for Quota)</option>
+                                            <option value="gemini 3.1 pro (high)">Gemini 3.1 Pro (High)</option>
+                                            <option value="gemini 3.1 pro (low)">Gemini 3.1 Pro (Low)</option>
+                                            <option value="gemini 3 flash">Gemini 3 Flash</option>
+                                            <option value="claude sonnet 4.6">Claude Sonnet 4.6 (Thinking)</option>
+                                            <option value="gpt-oss 120b">GPT-OSS 120B (Medium)</option>
+                                            <option value="claude opus 4.6">Claude Opus 4.6 (Thinking)</option>
+                                        </select>
+                                    </div>
+                                    <div style="font-size: 10px; color: var(--fg-dim);">
+                                        If Claude quota is exhausted, the queue will automatically switch to this model and continue running.
                                     </div>
                                 </div>
                                 
@@ -1163,113 +1136,6 @@ class SettingsPanel {
                     </div>
                     <button id="refreshQuotaBtn" class="btn-outline" style="width: 100%;">
                         Refresh Quota Status
-                    </button>
-                </div>
-
-                <div class="section">
-                    <div class="section-label">🔄 Hybrid Auto-Accept</div>
-                    <div style="font-size: 13px; opacity: 0.6; margin-bottom: 16px; line-height: 1.5;">
-                        Configure the hybrid auto-accept system that combines VS Code commands (primary) with CDP fallback for Shadow DOM elements.
-                    </div>
-                    
-                    <!-- Master Toggle -->
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border);">
-                        <div>
-                            <span style="font-size: 14px; font-weight: 600;">Enable Hybrid Mode</span>
-                            <div style="font-size: 12px; opacity: 0.5; margin-top: 4px;">Master toggle for hybrid auto-accept</div>
-                        </div>
-                        <label class="switch">
-                            <input type="checkbox" id="hybridEnabled">
-                            <span class="slider round"></span>
-                        </label>
-                    </div>
-                    
-                    <!-- VS Code Strategy -->
-                    <div style="background: rgba(255,255,255,0.02); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                            <div>
-                                <span style="font-size: 13px; font-weight: 600;">⚡ VS Code Commands (Primary)</span>
-                                <div style="font-size: 11px; opacity: 0.5; margin-top: 2px;">Uses built-in VS Code commands for reliable accept actions</div>
-                            </div>
-                            <label class="switch">
-                                <input type="checkbox" id="vscodeStrategyEnabled">
-                                <span class="slider round"></span>
-                            </label>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 12px; opacity: 0.7;">Poll Interval:</span>
-                            <input type="number" id="vscodePollInterval" min="100" max="5000" value="500" 
-                                   style="width: 80px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px;">
-                            <span style="font-size: 12px; opacity: 0.5;">ms</span>
-                        </div>
-                    </div>
-                    
-                    <!-- CDP Strategy -->
-                    <div style="background: rgba(255,255,255,0.02); border-radius: var(--radius-md); padding: 14px;">
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                            <div>
-                                <span style="font-size: 13px; font-weight: 600;">🌐 CDP Fallback (Shadow DOM)</span>
-                                <div style="font-size: 11px; opacity: 0.5; margin-top: 2px;">Handles Shadow DOM elements via Chrome DevTools Protocol</div>
-                            </div>
-                            <label class="switch">
-                                <input type="checkbox" id="cdpStrategyEnabled">
-                                <span class="slider round"></span>
-                            </label>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 12px; opacity: 0.7;">Poll Interval:</span>
-                            <input type="number" id="cdpPollInterval" min="500" max="10000" value="1500" 
-                                   style="width: 80px; background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg); padding: 6px 10px; border-radius: var(--radius-sm); font-size: 12px;">
-                            <span style="font-size: 12px; opacity: 0.5;">ms</span>
-                        </div>
-                    </div>
-                    
-                    <button id="saveHybridSettingsBtn" class="btn-primary" style="width: 100%; margin-top: 16px;">
-                        Save Hybrid Settings
-                    </button>
-                </div>
-
-                <div class="section">
-                    <div class="section-label">⏭️ Continue Button Auto-Click</div>
-                    <div style="font-size: 13px; opacity: 0.6; margin-bottom: 16px; line-height: 1.5;">
-                        Automatically detect and click "Continue" buttons when thinking limits are reached. Helps maintain conversation flow without manual intervention.
-                    </div>
-                    
-                    <!-- Auto-click on Open/Start Toggle -->
-                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border);">
-                        <div>
-                            <span style="font-size: 14px; font-weight: 600;">Auto-Click on Open/Start</span>
-                            <div style="font-size: 12px; opacity: 0.5; margin-top: 4px;">Click Continue when opening conversation or starting queue</div>
-                        </div>
-                        <label class="switch">
-                            <input type="checkbox" id="continueAutoClick" checked>
-                            <span class="slider round"></span>
-                        </label>
-                    </div>
-                    
-                    <!-- Policy Selection -->
-                    <div style="background: rgba(255,255,255,0.02); border-radius: var(--radius-md); padding: 14px;">
-                        <div style="font-size: 13px; font-weight: 600; margin-bottom: 12px;">Continue Policy</div>
-                        <div style="display: flex; gap: 12px;">
-                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; background: rgba(255,255,255,0.03); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-                                <input type="radio" name="continuePolicy" value="auto" checked>
-                                <div>
-                                    <div style="font-size: 12px; font-weight: 600;">Auto</div>
-                                    <div style="font-size: 11px; opacity: 0.5;">Click automatically</div>
-                                </div>
-                            </label>
-                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; flex: 1; background: rgba(255,255,255,0.03); padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);">
-                                <input type="radio" name="continuePolicy" value="ask">
-                                <div>
-                                    <div style="font-size: 12px; font-weight: 600;">Ask</div>
-                                    <div style="font-size: 11px; opacity: 0.5;">Wait for user action</div>
-                                </div>
-                            </label>
-                        </div>
-                    </div>
-                    
-                    <button id="saveContinueSettingsBtn" class="btn-primary" style="width: 100%; margin-top: 16px;">
-                        Save Continue Settings
                     </button>
                 </div>
 
@@ -1398,90 +1264,6 @@ class SettingsPanel {
                 // Request initial CDP port value
                 vscode.postMessage({ command: 'getCdpPort' });
 
-                // Hybrid Auto-Accept Settings
-                const hybridEnabled = document.getElementById('hybridEnabled');
-                const vscodeStrategyEnabled = document.getElementById('vscodeStrategyEnabled');
-                const vscodePollInterval = document.getElementById('vscodePollInterval');
-                const cdpStrategyEnabled = document.getElementById('cdpStrategyEnabled');
-                const cdpPollInterval = document.getElementById('cdpPollInterval');
-                const saveHybridSettingsBtn = document.getElementById('saveHybridSettingsBtn');
-
-                if (saveHybridSettingsBtn) {
-                    saveHybridSettingsBtn.addEventListener('click', () => {
-                        vscode.postMessage({
-                            command: 'setHybridSettings',
-                            hybridEnabled: hybridEnabled?.checked ?? true,
-                            vscodeEnabled: vscodeStrategyEnabled?.checked ?? true,
-                            vscodePollInterval: parseInt(vscodePollInterval?.value || '500', 10),
-                            cdpEnabled: cdpStrategyEnabled?.checked ?? true,
-                            cdpPollInterval: parseInt(cdpPollInterval?.value || '1500', 10)
-                        });
-                        saveHybridSettingsBtn.textContent = '✓ Saved!';
-                        saveHybridSettingsBtn.style.background = 'var(--green)';
-                        setTimeout(() => {
-                            saveHybridSettingsBtn.textContent = 'Save Hybrid Settings';
-                            saveHybridSettingsBtn.style.background = '';
-                        }, 2000);
-                    });
-                }
-
-                // Handle hybrid settings updates from extension
-                window.addEventListener('message', event => {
-                    const message = event.data;
-                    if (message.command === 'updateHybridSettings' && message.settings) {
-                        if (hybridEnabled) hybridEnabled.checked = message.settings.hybridEnabled;
-                        if (vscodeStrategyEnabled) vscodeStrategyEnabled.checked = message.settings.vscodeEnabled;
-                        if (vscodePollInterval) vscodePollInterval.value = message.settings.vscodePollInterval;
-                        if (cdpStrategyEnabled) cdpStrategyEnabled.checked = message.settings.cdpEnabled;
-                        if (cdpPollInterval) cdpPollInterval.value = message.settings.cdpPollInterval;
-                    }
-                });
-
-                // Request initial hybrid settings
-                vscode.postMessage({ command: 'getHybridSettings' });
-
-                // Continue Button Auto-Click Settings
-                const continueAutoClick = document.getElementById('continueAutoClick');
-                const continuePolicyRadios = document.querySelectorAll('input[name="continuePolicy"]');
-                const saveContinueSettingsBtn = document.getElementById('saveContinueSettingsBtn');
-
-                if (saveContinueSettingsBtn) {
-                    saveContinueSettingsBtn.addEventListener('click', () => {
-                        let selectedPolicy = 'auto';
-                        for (const radio of continuePolicyRadios) {
-                            if (radio.checked) {
-                                selectedPolicy = radio.value;
-                                break;
-                            }
-                        }
-                        vscode.postMessage({
-                            command: 'setContinueSettings',
-                            autoClickOnOpenOrStart: continueAutoClick?.checked ?? true,
-                            policy: selectedPolicy
-                        });
-                        saveContinueSettingsBtn.textContent = '✓ Saved!';
-                        saveContinueSettingsBtn.style.background = 'var(--green)';
-                        setTimeout(() => {
-                            saveContinueSettingsBtn.textContent = 'Save Continue Settings';
-                            saveContinueSettingsBtn.style.background = '';
-                        }, 2000);
-                    });
-                }
-
-                // Handle continue settings updates from extension
-                window.addEventListener('message', event => {
-                    const message = event.data;
-                    if (message.command === 'updateContinueSettings' && message.settings) {
-                        if (continueAutoClick) continueAutoClick.checked = message.settings.autoClickOnOpenOrStart;
-                        for (const radio of continuePolicyRadios) {
-                            radio.checked = (radio.value === message.settings.policy);
-                        }
-                    }
-                });
-
-                // Request initial continue settings
-                vscode.postMessage({ command: 'getContinueSettings' });
-
                 const bannedInput = document.getElementById('bannedCommandsInput');
                 const saveBannedBtn = document.getElementById('saveBannedBtn');
                 const resetBannedBtn = document.getElementById('resetBannedBtn');
@@ -1527,7 +1309,6 @@ class SettingsPanel {
 
                 const queueModeSelect = document.getElementById('queueMode');
                 const silenceTimeoutInput = document.getElementById('silenceTimeout');
-                const domActivityTrackingEnabled = document.getElementById('domActivityTrackingEnabled');
                 const checkPromptEnabled = document.getElementById('checkPromptEnabled');
                 const checkPromptText = document.getElementById('checkPromptText');
                 const resumeEnabled = document.getElementById('resumeEnabled');
@@ -1645,6 +1426,8 @@ class SettingsPanel {
                     if (queueModeSection) queueModeSection.style.display = mode === 'queue' ? 'block' : 'none';
                     // Hide Save Schedule button in queue mode (Save & Run Queue handles it)
                     if (saveScheduleContainer) saveScheduleContainer.style.display = mode === 'queue' ? 'none' : 'block';
+                    const scheduleValueContainer = document.getElementById('scheduleValueContainer');
+                    if (scheduleValueContainer) scheduleValueContainer.style.display = mode === 'queue' ? 'none' : 'block';
                 }
 
                 if (scheduleEnabled) {
@@ -1715,11 +1498,11 @@ class SettingsPanel {
                             prompts: currentPrompts,
                             queueMode: queueModeSelect ? queueModeSelect.value : 'consume',
                             silenceTimeout: silenceTimeoutInput ? parseInt(silenceTimeoutInput.value) : 30,
-                            domActivityTrackingEnabled: domActivityTrackingEnabled ? domActivityTrackingEnabled.checked : true,
                             checkPromptEnabled: checkPromptEnabled ? checkPromptEnabled.checked : false,
                             checkPromptText: checkPromptText ? checkPromptText.value : '',
                             resumeEnabled: resumeEnabled ? resumeEnabled.checked : true,
-                            autoContinueEnabled: autoContinueEnabled ? autoContinueEnabled.checked : false
+                            autoContinueEnabled: autoContinueEnabled ? autoContinueEnabled.checked : false,
+                            fallbackModel: document.getElementById('fallbackModel') ? document.getElementById('fallbackModel').value : ''
                         };
 
                         vscode.postMessage({
@@ -1745,12 +1528,6 @@ class SettingsPanel {
                 if (autoContinueEnabled) {
                      autoContinueEnabled.addEventListener('change', (e) => {
                         vscode.postMessage({ command: 'setAutoContinue', value: e.target.checked });
-                    });
-                }
-
-                if (domActivityTrackingEnabled) {
-                     domActivityTrackingEnabled.addEventListener('change', (e) => {
-                        vscode.postMessage({ command: 'setDomActivityTracking', value: e.target.checked });
                     });
                 }
 
@@ -1791,7 +1568,6 @@ class SettingsPanel {
                             prompts: currentPrompts,
                             queueMode: queueModeSelect ? queueModeSelect.value : 'consume',
                             silenceTimeout: silenceTimeoutInput ? parseInt(silenceTimeoutInput.value) : 30,
-                            domActivityTrackingEnabled: domActivityTrackingEnabled ? domActivityTrackingEnabled.checked : true,
                             checkPromptEnabled: checkPromptEnabled ? checkPromptEnabled.checked : false,
                             checkPromptText: checkPromptText ? checkPromptText.value : '',
                             resumeEnabled: resumeEnabled ? resumeEnabled.checked : true,
@@ -1947,7 +1723,6 @@ class SettingsPanel {
                             
                             if (queueModeSelect) queueModeSelect.value = msg.schedule.queueMode || 'consume';
                             if (silenceTimeoutInput) silenceTimeoutInput.value = msg.schedule.silenceTimeout || 30;
-                            if (domActivityTrackingEnabled) domActivityTrackingEnabled.checked = msg.schedule.domActivityTrackingEnabled !== false;
                             if (checkPromptEnabled) checkPromptEnabled.checked = msg.schedule.checkPromptEnabled || false;
                             if (checkPromptText) checkPromptText.value = msg.schedule.checkPromptText || '';
                             if (checkPromptText) checkPromptText.value = msg.schedule.checkPromptText || '';

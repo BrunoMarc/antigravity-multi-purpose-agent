@@ -2,17 +2,7 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const { DebugHandler } = require('./debug-handler');
-const { BaseLogger } = require('./base-logger');
-const { 
-    GLOBAL_STATE_KEY, 
-    FREQ_STATE_KEY, 
-    BANNED_COMMANDS_KEY, 
-    ROI_STATS_KEY, 
-    CDP_SETUP_COMPLETED_KEY, 
-    EXTENSION_VERSION_KEY,
-    BOOT_RELAUNCH_PROMPTED_KEY,
-    SECONDS_PER_CLICK 
-} = require('./constants');
+
 
 // Lazy load SettingsPanel to avoid blocking activation
 let SettingsPanel = null;
@@ -41,6 +31,16 @@ function getAntigravityClient() {
     return AntigravityClient;
 }
 
+// states
+
+const GLOBAL_STATE_KEY = 'auto-accept-enabled-global';
+const FREQ_STATE_KEY = 'auto-accept-frequency';
+const BANNED_COMMANDS_KEY = 'auto-accept-banned-commands';
+const ROI_STATS_KEY = 'auto-accept-roi-stats';
+const CDP_SETUP_COMPLETED_KEY = 'cdp-setup-completed';
+const EXTENSION_VERSION_KEY = 'extension-version'; // Track version to detect reinstall
+const SECONDS_PER_CLICK = 5; // Conservative estimate: 5 seconds saved per auto-accept
+
 let isEnabled = false;
 let isLockedOut = false; // Local tracking
 let pollFrequency = 2000; // Default for Free
@@ -60,8 +60,6 @@ let globalContext;
 let cdpHandler;
 let relauncher;
 let debugHandler; // Debug Handler instance
-let HybridAutoAccept = null;
-let hybridAutoAccept = null;
 let configuredCdpPort = 9004; // Configurable CDP port from settings
 let cdpPopupShownThisSession = false; // Track if popup was shown this session
 let relaunchAttemptedThisSession = false; // Track if relaunch was attempted
@@ -82,23 +80,17 @@ function formatCdpLogSuffix(d = new Date()) {
 
 const cdpLogPath = path.join(extensionRoot, `multi-purpose-cdp-${formatCdpLogSuffix()}.log`);
 
-// Create a logger instance with file output
-const fileLogger = (message) => {
+function log(message) {
     try {
         const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
         const logLine = `[${timestamp}] ${message}`;
         console.log(logLine);
+
+        // Write to log file for debug mode
         fs.appendFileSync(cdpLogPath, logLine + '\n');
     } catch (e) {
         console.error('\u{26A1} failed:', e);
     }
-};
-
-// Module-level logger instance
-const logger = new BaseLogger(fileLogger, 'Extension');
-
-function log(message) {
-    logger._log(message);
 }
 
 // --- Scheduler Class ---
@@ -126,10 +118,8 @@ class Scheduler {
         this.queueRunId = 0;
         this.taskStartTime = 0;
         this.hasSentCurrentItem = false;
-        this.lastSnapshotTextLength = 0; // For snapshot-based silence detection
         this.activationTime = Date.now(); // Track when scheduler was created for activation guard
         this.ensureCdpReady = typeof options.ensureCdpReady === 'function' ? options.ensureCdpReady : null;
-        this.onQueueStatusChange = typeof options.onQueueStatusChange === 'function' ? options.onQueueStatusChange : null;
         this.lastCdpSyncTime = 0;
 
         // Multi-queue ready architecture (single conversation for now)
@@ -137,47 +127,6 @@ class Scheduler {
         this.promptHistory = [];       // HistoryEntry[]
         this.conversationStatus = 'idle'; // 'idle'|'running'|'waiting'
         this.isPaused = false;         // User-initiated pause
-        this.queueRetryTimer = null;
-        this.queueRetryDelayMs = 2000;
-        this.queueRetryAttempts = 0;
-        this.maxQueueRetryAttempts = 30;
-        this.lastBusyNoticeTs = 0;
-    }
-
-    _emitQueueStatus() {
-        if (this.onQueueStatusChange) {
-            try { this.onQueueStatusChange(); } catch (e) { /* ignore */ }
-        }
-    }
-
-    clearQueueRetryTimer() {
-        if (this.queueRetryTimer) {
-            clearTimeout(this.queueRetryTimer);
-            this.queueRetryTimer = null;
-        }
-    }
-
-    scheduleQueueRetry(runId, reason = 'busy') {
-        if (this.queueRetryTimer || !this.isRunningQueue || this.isStopped) return;
-
-        this.queueRetryTimer = setTimeout(async () => {
-            this.queueRetryTimer = null;
-
-            if (!this.isRunningQueue || this.isStopped || runId !== this.queueRunId) return;
-
-            if (this.isPaused || this.isQuotaExhausted) {
-                this.scheduleQueueRetry(runId, 'paused-or-quota');
-                return;
-            }
-
-            this.log(`Scheduler: Retrying current queue item (${reason})...`);
-            try {
-                await this.executeCurrentQueueItem();
-            } catch (e) {
-                const msg = e?.message || String(e);
-                this.log(`Scheduler: Retry execution failed: ${msg}`);
-            }
-        }, this.queueRetryDelayMs);
     }
 
     async ensureCdpReadyNow(reason, force = false) {
@@ -217,7 +166,6 @@ class Scheduler {
             this.silenceTimer = null;
         }
         this.isRunningQueue = false;
-        this.clearQueueRetryTimer();
     }
 
     loadConfig() {
@@ -233,12 +181,12 @@ class Scheduler {
         this.config = {
             mode: cfg.get('mode', 'interval'),
             value: cfg.get('value', '30'),
-            prompt: cfg.get('prompt', 'Status report please'),
+            prompt: cfg.get('prompt', 'Continue a implementação do loop de evolução autônomo e teste os geradores. Se tudo passou, faça o commit.'),
             prompts: cfg.get('prompts', []),
             queueMode: cfg.get('queueMode', 'consume'),
-            silenceTimeout: cfg.get('silenceTimeout', 30) * 1000, // Convert to ms
+            silenceTimeout: cfg.get('silenceTimeout', 120) * 1000, // Convert to ms
             checkPromptEnabled: cfg.get('checkPrompt.enabled', false),
-            checkPromptText: cfg.get('checkPrompt.text', 'Make sure that the previous task was implemented fully as per requirements, implement all gaps, fix all bugs and test everything. Make sure that you reused existing code where possible instead of duplicating code. ultrathink internally avoiding verbosity.')
+            checkPromptText: cfg.get('checkPrompt.text', 'Verifique a implementação atual usando testes e lint. Se estiver com erros, corrija-os. Se o resultado for sucesso absoluto, faça o commit sem push (git commit -am "chore: auto-checkpoint") e siga imediatamente para o próximo passo do Handoff / Loop de Evolução Autônomo.')
         };
         this.log(`Scheduler Config: mode=${this.config.mode}, enabled=${this.enabled}, prompts=${this.config.prompts.length}`);
     }
@@ -285,19 +233,6 @@ class Scheduler {
     }
 
     async checkSilence() {
-        // Reentrancy guard: checkSilence is async and called from setInterval.
-        // Without this guard, concurrent calls could both detect idle and both
-        // call advanceQueue(), sending multiple prompts simultaneously.
-        if (this._checkingSilence) return;
-        this._checkingSilence = true;
-        try {
-            await this._checkSilenceImpl();
-        } finally {
-            this._checkingSilence = false;
-        }
-    }
-
-    async _checkSilenceImpl() {
         // Queue advancement only requires: running queue + CDP connection + queue mode
         // Note: this.enabled is for scheduled runs; manual "Run Queue" doesn't need it
         if (!this.cdpHandler || !this.isRunningQueue) return;
@@ -318,49 +253,34 @@ class Scheduler {
                 this.log(`Scheduler: Activity detected (${currentClicks} clicks)`);
             }
 
+            // GRACE PERIOD: If we just sent a prompt in the last 15 seconds, 
+            // ALWAYS consider the agent busy to give the UI time to render 'Running' or 'Thinking'
+            const timeSinceLastSend = Date.now() - this.taskStartTime;
+            const inGracePeriod = timeSinceLastSend < 15000;
+
+            // Check if the agent is busy (e.g., generating)
+            const isBusy = await this.cdpHandler.isBusy() || inGracePeriod;
+            
+            if (isBusy) {
+                this.lastActivityTime = Date.now();
+                if (!this.wasBusy) {
+                    this.log(`Scheduler: Agent is busy (or in grace period), resetting silence timeout`);
+                    this.wasBusy = true;
+                }
+            } else {
+                this.wasBusy = false;
+            }
+
             // Check if silence timeout reached (only after we've successfully sent the current queue item)
             const silenceDuration = Date.now() - (this.lastActivityTime || this.lastClickTime || Date.now());
             const taskDuration = Date.now() - this.taskStartTime;
 
-            // Never advance while conversation is still generating/responding.
-            // DOM-based busy detection (aria-busy, stop buttons, loading)
-            const conversationBusy = this.cdpHandler?.isConversationBusy
-                ? await this.cdpHandler.isConversationBusy(this.targetConversation)
-                : false;
-
-            if (conversationBusy) {
-                this.conversationStatus = 'waiting';
-                this._wasBusyThisItem = true; // Track that we saw the AI working
-                this._idleConfirmCount = 0;   // Reset idle confirmation counter
-                // NOTE: Do NOT reset lastActivityTime here. The silence timer counts
-                // from the last real activity (send/click). This ensures that long-running
-                // tasks advance quickly after completion (since silence already exceeded
-                // the timeout while the AI was working).
-                return;
-            }
-
-            // Fast path: if we previously detected the AI was busy and now it's idle,
-            // use a short confirmation window instead of the full silence timeout.
-            const IDLE_CONFIRM_THRESHOLD = 2; // 2 × 5s = 10s of confirmed idle
-            if (this._wasBusyThisItem && this.hasSentCurrentItem && taskDuration > 10000) {
-                this._idleConfirmCount = (this._idleConfirmCount || 0) + 1;
-                if (this._idleConfirmCount >= IDLE_CONFIRM_THRESHOLD) {
-                    this.log(`Scheduler: Task complete — AI was busy, now idle for ${this._idleConfirmCount * 5}s. Advancing queue.`);
-                    this.conversationStatus = 'idle';
-                    await this.advanceQueue();
-                    return;
-                }
-                this.conversationStatus = 'idle';
-                this.log(`Scheduler: AI finished, confirming idle (${this._idleConfirmCount}/${IDLE_CONFIRM_THRESHOLD})`);
-                return;
-            }
-
-            // Fallback: standard silence timeout (same as working commit 82f440d).
-            // silenceDuration counts from the last real activity (send/click), so for
-            // long-running tasks the timeout is already exceeded when the AI finishes.
-            if (taskDuration > 10000 && this.hasSentCurrentItem && silenceDuration > this.config.silenceTimeout) {
+            // Only advance if:
+            // 1. We've been running this task for at least 15 seconds (Grace Period)
+            // 2. We successfully sent the current queue item
+            // 3. Silence duration exceeds timeout
+            if (taskDuration > 15000 && this.hasSentCurrentItem && silenceDuration > this.config.silenceTimeout) {
                 this.log(`Scheduler: Silence detected (${Math.round(silenceDuration / 1000)}s), advancing queue`);
-                this.conversationStatus = 'idle';
                 await this.advanceQueue();
             }
         } catch (e) {
@@ -416,40 +336,15 @@ class Scheduler {
         // Ensure we have fresh CDP connections and injected helpers (chat webviews may not exist at activation time).
         await this.ensureCdpReadyNow('startQueue', true);
 
-        // Pre-check: verify at least one connection can deliver prompts.
-        // Chat webviews may not exist after an IDE reload until the user opens a chat panel.
-        if (this.cdpHandler && this.cdpHandler.getConnectionCount() > 0) {
-            const probeOk = await this.cdpHandler.probeForSendCapability();
-            if (!probeOk) {
-                this.log('Scheduler: No connection has send capability — trying to open agent panel');
-                try {
-                    await vscode.commands.executeCommand('antigravity.agentPanel.open');
-                    await new Promise(r => setTimeout(r, 3000));
-                    await this.ensureCdpReadyNow('startQueue-afterPanelOpen', true);
-                } catch (e) { /* ignore */ }
-                const probeOk2 = await this.cdpHandler.probeForSendCapability();
-                if (!probeOk2) {
-                    this.log('Scheduler: Still no send capability after opening panel');
-                    vscode.window.showWarningMessage('Multi Purpose: No chat panel found. Please open a chat conversation and try again.');
-                    return;
-                }
-            }
-        }
-
         this.runtimeQueue = this.buildRuntimeQueue();
         this.queueIndex = 0;
         this.isRunningQueue = true;
         this.isStopped = false; // Clear stopped flag when starting
-        this.clearQueueRetryTimer();
-        this.queueRetryAttempts = 0;
         this.lastClickCount = 0;
         this.lastClickTime = Date.now();
         this.lastActivityTime = Date.now();
         this.taskStartTime = Date.now();
         this.hasSentCurrentItem = false;
-        this._wasBusyThisItem = false;
-        this._idleConfirmCount = 0;
-        this._emitQueueStatus();
 
         this.log(`Scheduler: Starting queue with ${this.runtimeQueue.length} items`);
 
@@ -472,21 +367,11 @@ class Scheduler {
             return;
         }
 
-        this.executeCurrentQueueItem().catch(e => {
-            const msg = e?.message || String(e);
-            this.log(`Scheduler: Failed to execute first queue item: ${msg}`);
-            if (this.isRunningQueue) {
-                this.stopQueue();
-            }
-            vscode.window.showErrorMessage(`Queue Error: ${msg}`);
-        });
+        await this.executeCurrentQueueItem();
     }
 
     async advanceQueue() {
         if (!this.isRunningQueue) return;
-
-        this.clearQueueRetryTimer();
-        this.queueRetryAttempts = 0;
 
         // In consume mode, remove the completed prompt from config immediately
         if (this.config.queueMode === 'consume') {
@@ -499,9 +384,6 @@ class Scheduler {
         this.lastActivityTime = Date.now();
         this.taskStartTime = Date.now();
         this.hasSentCurrentItem = false;
-        this._wasBusyThisItem = false;
-        this._idleConfirmCount = 0;
-        this._emitQueueStatus();
 
         if (this.queueIndex >= this.runtimeQueue.length) {
             if (this.config.queueMode === 'loop' && this.runtimeQueue.length > 0) {
@@ -513,7 +395,6 @@ class Scheduler {
             } else {
                 this.log('Scheduler: Queue completed, stopping');
                 this.isRunningQueue = false;
-                this._emitQueueStatus();
                 vscode.window.showInformationMessage('Multi Purpose: Prompt queue completed!');
                 return;
             }
@@ -529,13 +410,10 @@ class Scheduler {
 
         const item = this.runtimeQueue[this.queueIndex];
         const itemType = item.type === 'check' ? 'Check Prompt' : `Task ${item.index + 1}`;
-        const wasWaiting = this.conversationStatus === 'waiting';
 
         this.log(`Scheduler: Executing ${itemType}: "${item.text.substring(0, 50)}..."`);
         this.conversationStatus = 'running';
-        if (!wasWaiting) {
-            vscode.window.showInformationMessage(`Multi Purpose: Sending ${itemType}`);
-        }
+        vscode.window.showInformationMessage(`Multi Purpose: Sending ${itemType}`);
 
         if (this.isStopped || runId !== this.queueRunId) return;
         await this.sendPrompt(item.text);
@@ -607,7 +485,7 @@ class Scheduler {
         }
     }
 
-    setQuotaExhausted(exhausted) {
+    async setQuotaExhausted(exhausted) {
         const wasExhausted = this.isQuotaExhausted;
         this.isQuotaExhausted = exhausted;
 
@@ -615,7 +493,30 @@ class Scheduler {
             this.log('Scheduler: Quota transitioned from exhausted to available');
             this.resume();
         } else if (exhausted && !wasExhausted) {
-            this.log('Scheduler: Quota became exhausted, pausing queue');
+            this.log('Scheduler: Quota became exhausted. Checking for fallback model...');
+            
+            const fallbackModel = vscode.workspace.getConfiguration('auto-accept').get('fallbackModel', 'gemini 3.1');
+            let switched = false;
+            
+            if (fallbackModel && fallbackModel.trim().length > 0 && this.config.mode === 'queue' && this.isRunningQueue) {
+                try {
+                    switched = await this.cdpHandler.switchModel(fallbackModel);
+                } catch(e) {
+                    this.log('Scheduler: Error trying to switch fallback model.');
+                }
+            }
+
+            if (switched) {
+                this.log(`Scheduler: Successfully switched to fallback model '${fallbackModel}'. Resuming queue.`);
+                vscode.window.showInformationMessage(`Quota exhausted! Switched to fallback model: ${fallbackModel}`);
+                // Since we switched models, we can continue the queue.
+                this.isQuotaExhausted = false;
+            } else {
+                this.log('Scheduler: Quota exhausted, pausing queue');
+                if (this.config.mode === 'queue' && this.isRunningQueue) {
+                    vscode.window.showWarningMessage('Antigravity Quota Exhausted. Queue paused.');
+                }
+            }
         }
     }
 
@@ -634,32 +535,8 @@ class Scheduler {
             this.log(`Scheduler: Sending prompt "${text.substring(0, 50)}..."`);
 
             // Use CDP only - the verified working method
-            if (this.cdpHandler && this.cdpHandler.getConnectionCount() > 0) {
+            if (this.cdpHandler) {
                 try {
-                    // Strict queue sequencing guard:
-                    // if chat is still working on a previous task, wait and retry instead of sending.
-                    if (this.isRunningQueue && this.config.mode === 'queue' && this.cdpHandler.isConversationBusy) {
-                        const busyNow = await this.cdpHandler.isConversationBusy(this.targetConversation);
-                        if (busyNow) {
-                            this.conversationStatus = 'waiting';
-                            this.queueRetryAttempts += 1;
-
-                            if (this.queueRetryAttempts > this.maxQueueRetryAttempts) {
-                                throw new Error('Conversation stayed busy for too long while waiting to send queue prompt.');
-                            }
-
-                            const now = Date.now();
-                            if (!this.lastBusyNoticeTs || (now - this.lastBusyNoticeTs) > 15000) {
-                                vscode.window.showInformationMessage('Multi Purpose: Queue waiting for previous task to finish...');
-                                this.lastBusyNoticeTs = now;
-                            }
-
-                            this.log(`Scheduler: Conversation busy before send, waiting/retrying (${this.queueRetryAttempts}/${this.maxQueueRetryAttempts})`);
-                            this.scheduleQueueRetry(runId, 'conversation-busy');
-                            return;
-                        }
-                    }
-
                     // Ensure CDP has scanned/injected latest chat surfaces before attempting to send.
                     await this.ensureCdpReadyNow('queuePrompt');
                     if (this.isStopped || runId !== this.queueRunId) return;
@@ -680,30 +557,9 @@ class Scheduler {
 
                     // CRITICAL FIX: If 0 prompts sent, we must abort, otherwise we wait for silence forever
                     if (sentCount === 0) {
-                        if (this.isRunningQueue && this.config.mode === 'queue') {
-                            this.conversationStatus = 'waiting';
-                            this.queueRetryAttempts += 1;
-
-                            if (this.queueRetryAttempts > this.maxQueueRetryAttempts) {
-                                throw new Error('Prompt not delivered after retries (conversation busy/unavailable).');
-                            }
-
-                            const now = Date.now();
-                            if (!this.lastBusyNoticeTs || (now - this.lastBusyNoticeTs) > 15000) {
-                                vscode.window.showInformationMessage('Multi Purpose: Queue is waiting for active chat input. Retrying...');
-                                this.lastBusyNoticeTs = now;
-                            }
-
-                            this.log(`Scheduler: Prompt not delivered, waiting/retrying (${this.queueRetryAttempts}/${this.maxQueueRetryAttempts})`);
-                            this.scheduleQueueRetry(runId, 'no-active-input');
-                            return;
-                        }
-
                         throw new Error('Prompt not delivered (no active chat input / send function found).');
                     }
 
-                    this.clearQueueRetryTimer();
-                    this.queueRetryAttempts = 0;
                     this.addToHistory(text, this.targetConversation);
                     if (this.isRunningQueue && this.config.mode === 'queue') {
                         this.hasSentCurrentItem = true;
@@ -718,26 +574,9 @@ class Scheduler {
                     return;
                 }
             } else {
-                // CDP not available — check if it's a port issue and give actionable feedback
-                const hasFlag = process.argv.some(a => a.includes('--remote-debugging-port='));
-                const connCount = this.cdpHandler ? this.cdpHandler.getConnectionCount() : 0;
-                this.log(`Scheduler: CDP unavailable (handler=${!!this.cdpHandler}, connections=${connCount}, hasFlag=${hasFlag})`);
-
-                if (!hasFlag) {
-                    vscode.window.showErrorMessage(
-                        `Queue Error: CDP not enabled. Restart the IDE with --remote-debugging-port=${configuredCdpPort} to use the prompt queue.`,
-                        'Restart with CDP'
-                    ).then(action => {
-                        if (action === 'Restart with CDP' && relauncher) {
-                            relauncher.ensureCDPAndRelaunch();
-                        }
-                    });
-                } else {
-                    vscode.window.showErrorMessage(
-                        `Queue Error: CDP flag present but no connections on port ${configuredCdpPort}. Open a chat panel and try again.`
-                    );
-                }
+                this.log('Scheduler: CDP handler not available');
                 if (this.isRunningQueue && this.config.mode === 'queue') {
+                    vscode.window.showErrorMessage('Queue Error: CDP handler not available.');
                     this.stopQueue();
                 }
             }
@@ -869,8 +708,6 @@ class Scheduler {
         if (!this.isRunningQueue && this.runtimeQueue.length === 0) return false;
         this.isRunningQueue = false;
         this.isStopped = true; // Signal pending prompts to cancel
-        this.clearQueueRetryTimer();
-        this.queueRetryAttempts = 0;
         this.queueRunId++;
         this.runtimeQueue = [];
         this.queueIndex = 0;
@@ -884,7 +721,6 @@ class Scheduler {
         // Reset the prompt queue to cancel pending operations
         this.promptQueue = Promise.resolve();
         this.log('Scheduler: Queue stopped by user');
-        this._emitQueueStatus();
         vscode.window.showInformationMessage('Queue stopped.');
         return true;
     }
@@ -893,8 +729,6 @@ class Scheduler {
         // Stop the queue if running
         this.isRunningQueue = false;
         this.isStopped = false; // Reset the stopped flag
-        this.clearQueueRetryTimer();
-        this.queueRetryAttempts = 0;
         this.queueRunId++;
         this.runtimeQueue = [];
         this.queueIndex = 0;
@@ -906,7 +740,6 @@ class Scheduler {
         this.taskStartTime = 0;
         this.hasSentCurrentItem = false;
         this.promptQueue = Promise.resolve(); // Clear pending prompts
-        this._emitQueueStatus();
 
         // Clear prompts from config
         try {
@@ -933,63 +766,6 @@ function detectIDE() {
     const appName = vscode.env.appName || '';
     if (appName.toLowerCase().includes('antigravity')) return 'Antigravity';
     return 'Code'; // VS Code base
-}
-
-function getCdpBehaviorConfig() {
-    const domActivityTracking = vscode.workspace.getConfiguration('auto-accept.domActivityTracking').get('enabled', true);
-    const continueConfig = vscode.workspace.getConfiguration('auto-accept.continue');
-    const autoClickOnOpenOrStart = continueConfig.get('autoClickOnOpenOrStart', true);
-    const configuredPolicy = continueConfig.get('policy', 'auto');
-    const continuePolicy = autoClickOnOpenOrStart ? configuredPolicy : 'ask';
-
-    return {
-        domActivityTracking,
-        continuePolicy,
-        domAutoAcceptEnabled: false
-    };
-}
-
-function getHybridRuntimeConfig() {
-    const cfg = vscode.workspace.getConfiguration('auto-accept.hybrid');
-    return {
-        enabled: cfg.get('enabled', true),
-        primaryStrategy: {
-            enabled: cfg.get('primaryStrategy.enabled', true),
-            pollInterval: cfg.get('primaryStrategy.pollInterval', 500),
-            commands: cfg.get('primaryStrategy.commands', undefined)
-        },
-        fallbackStrategy: {
-            enabled: cfg.get('fallbackStrategy.enabled', true),
-            pollInterval: cfg.get('fallbackStrategy.pollInterval', 1500),
-            useDataTestId: cfg.get('fallbackStrategy.useDataTestId', true)
-        },
-        safety: {
-            bannedCommands: cfg.get('safety.bannedCommands', []),
-            excludedCommands: cfg.get('safety.excludedCommands', []),
-            requireVisibility: cfg.get('safety.requireVisibility', true)
-        }
-    };
-}
-
-async function startHybridAutoAccept() {
-    if (!hybridAutoAccept) return;
-    try {
-        hybridAutoAccept.updateConfig(getHybridRuntimeConfig());
-        await hybridAutoAccept.start();
-        log('Hybrid auto-accept started (command-first mode).');
-    } catch (e) {
-        log(`Hybrid start error: ${e.message}`);
-    }
-}
-
-async function stopHybridAutoAccept() {
-    if (!hybridAutoAccept) return;
-    try {
-        await hybridAutoAccept.stop();
-        log('Hybrid auto-accept stopped.');
-    } catch (e) {
-        log(`Hybrid stop error: ${e.message}`);
-    }
 }
 
 /**
@@ -1116,9 +892,6 @@ async function activate(context) {
         try {
             const { CDPHandler } = require('./cdp-handler');
             const { Relauncher } = require('./relauncher');
-            if (!HybridAutoAccept) {
-                HybridAutoAccept = require('./auto-accept').HybridAutoAccept;
-            }
 
             // Read configured CDP port from settings
             configuredCdpPort = vscode.workspace.getConfiguration('auto-accept').get('cdpPort', 9004);
@@ -1126,12 +899,6 @@ async function activate(context) {
 
             cdpHandler = new CDPHandler(log, configuredCdpPort);
             relauncher = new Relauncher(log, configuredCdpPort);
-            hybridAutoAccept = new HybridAutoAccept({
-                context,
-                cdpHandler,
-                logger: log,
-                config: getHybridRuntimeConfig()
-            });
             log(`CDP handlers initialized for ${currentIDE}.`);
 
 
@@ -1143,30 +910,26 @@ async function activate(context) {
                 ? workspaceFolders[0].name
                 : null;
 
-            const cdpBehaviorConfig = getCdpBehaviorConfig();
             const cdpConfig = {
                 ide: currentIDE,
                 bannedCommands: context.globalState.get(BANNED_COMMANDS_KEY, []),
                 pollInterval: context.globalState.get(FREQ_STATE_KEY, 1000),
                 workspaceName: detectedWorkspace,
-                port: configuredCdpPort,
-                ...cdpBehaviorConfig
+                port: configuredCdpPort
             };
-            try {
-                await cdpHandler.start(cdpConfig);
+            cdpHandler.start(cdpConfig).then(() => {
                 log(`CDP connections established. Active connections: ${cdpHandler.getConnectionCount()}`);
-            } catch (e) {
+            }).catch(e => {
                 log(`CDP start warning: ${e.message}`);
-            }
+            });
 
             // Initialize Scheduler
-            scheduler = new Scheduler(context, cdpHandler, log, { ensureCdpReady: syncSessions, onQueueStatusChange: updateQueueStatusBar });
+            scheduler = new Scheduler(context, cdpHandler, log, { ensureCdpReady: syncSessions });
             scheduler.start();
 
             debugHandler = new DebugHandler(context, {
                 log,
                 getScheduler: () => scheduler,
-                getHybridAutoAccept: () => hybridAutoAccept,
                 getAntigravityClient: () => antigravityClient,
                 getLockedOut: () => isLockedOut,
                 getCDPHandler: () => cdpHandler,
@@ -1254,7 +1017,6 @@ async function activate(context) {
                     // Ensure CDP connects/injects the active chat surface before starting the queue.
                     await syncSessions();
                     await scheduler.startQueue(options);
-                    updateQueueStatusBar();
                     log('[Scheduler] Queue start handled via command');
                 } else {
                     log('[Scheduler] Cannot start queue - scheduler not initialized');
@@ -1302,7 +1064,6 @@ async function activate(context) {
             vscode.commands.registerCommand('auto-accept.stopQueue', () => {
                 if (scheduler) {
                     scheduler.stopQueue();
-                    updateQueueStatusBar();
                 }
             }),
             vscode.commands.registerCommand('auto-accept.showQueueMenu', async () => {
@@ -1334,7 +1095,6 @@ async function activate(context) {
                         case 'stop': scheduler.stopQueue(); break;
                         case 'settings': vscode.commands.executeCommand('auto-accept.openSettings'); break;
                     }
-                    updateQueueStatusBar();
                 }
             }),
             vscode.commands.registerCommand('auto-accept.resetSettings', async () => {
@@ -1408,39 +1168,41 @@ async function ensureCDPOrPrompt(showPrompt = false) {
 async function checkEnvironmentAndStart() {
     const vscode = require('vscode');
     const currentVersion = vscode.extensions.getExtension('Rodhayl.multi-purpose-agent')?.packageJSON?.version || '0.0.0';
+    const storedVersion = globalContext.globalState.get(EXTENSION_VERSION_KEY, null);
 
-    // Always clear cached CDP state on activation to avoid stale data issues
-    log(`Activation cleanup: resetting CDP setup state (version: ${currentVersion}).`);
-    await globalContext.globalState.update(CDP_SETUP_COMPLETED_KEY, false);
-    await globalContext.globalState.update(EXTENSION_VERSION_KEY, currentVersion);
+    // Detect fresh install or reinstall (version changed)
+    const isNewInstall = storedVersion === null;
+    const isReinstall = storedVersion !== null && storedVersion !== currentVersion;
 
-    const bootRelaunchAlreadyDone = globalContext.globalState.get(BOOT_RELAUNCH_PROMPTED_KEY, false);
+    if (isNewInstall || isReinstall) {
+        log(`${isReinstall ? 'Reinstall' : 'New install'} detected (${storedVersion} → ${currentVersion}). Resetting CDP setup state.`);
+        await globalContext.globalState.update(CDP_SETUP_COMPLETED_KEY, false);
+        await globalContext.globalState.update(EXTENSION_VERSION_KEY, currentVersion);
+    }
+
+    const cdpSetupCompleted = globalContext.globalState.get(CDP_SETUP_COMPLETED_KEY, false);
     const cdpAvailable = cdpHandler ? await cdpHandler.isCDPAvailable() : false;
 
-    // CDP is available — mark setup complete and continue
-    if (cdpAvailable) {
-        log('CDP is active and available on port ' + configuredCdpPort + '.');
+    // First install or reinstall: CDP not set up yet, prompt for restart
+    if (!cdpSetupCompleted && !cdpAvailable && relauncher) {
+        log('CDP not available, showing restart prompt...');
+        await relauncher.ensureCDPAndRelaunch();
         await globalContext.globalState.update(CDP_SETUP_COMPLETED_KEY, true);
-    } else if (!bootRelaunchAlreadyDone && relauncher) {
-        // First-time boot: CDP not available, prompt once for restart
-        const hasFlag = process.argv.some(a => a.includes('--remote-debugging-port='));
-        if (hasFlag) {
-            // Flag IS present but port not responding — genuine connectivity issue
-            log('CDP flag present in process.argv but port ' + configuredCdpPort + ' not responding. Showing error popup...');
-            relaunchAttemptedThisSession = true;
-            await globalContext.globalState.update(BOOT_RELAUNCH_PROMPTED_KEY, true);
-            await showCDPConnectionPopup();
-        } else {
-            // Flag missing — offer to restart with the flag (once only)
-            log('CDP not available, showing one-time restart prompt...');
-            await globalContext.globalState.update(BOOT_RELAUNCH_PROMPTED_KEY, true);
-            await relauncher.ensureCDPAndRelaunch();
-            updateStatusBar();
-            return;
-        }
-    } else if (!cdpAvailable) {
-        // Boot relaunch already prompted before — do not prompt again
-        log('CDP not available on port ' + configuredCdpPort + '. Boot relaunch was already prompted previously, skipping.');
+        updateStatusBar();
+        return;
+    }
+
+    // Restart was done but CDP still not available (wrong port) - show error popup
+    if (cdpSetupCompleted && !cdpAvailable) {
+        log('Restart was done but CDP still not available. Showing port error popup...');
+        relaunchAttemptedThisSession = true;
+        await showCDPConnectionPopup();
+    }
+
+    // Mark setup complete if CDP is already working
+    if (!cdpSetupCompleted && cdpAvailable) {
+        log('CDP already available, marking setup complete.');
+        await globalContext.globalState.update(CDP_SETUP_COMPLETED_KEY, true);
     }
 
     // Normal startup: if extension was enabled, try to restore state
@@ -1452,7 +1214,6 @@ async function checkEnvironmentAndStart() {
             await globalContext.globalState.update(GLOBAL_STATE_KEY, false);
         } else {
             await startPolling();
-            await startHybridAutoAccept();
             startStatsCollection(globalContext);
         }
     }
@@ -1473,14 +1234,10 @@ async function handleToggle(context) {
             const result = await relauncher.ensureCDPAndRelaunch();
             relaunchAttemptedThisSession = true;
 
-            // Only show the detailed error popup if the flag IS in process.argv
-            // but CDP still didn't respond (genuine connectivity issue).
-            // When the flag is missing, the relaunch prompt above is sufficient.
+            // If relaunch was not chosen (user clicked "Later" or modification failed), 
+            // show the one-time popup with manual launch instructions
             if (!result.relaunched) {
-                const hasFlag = process.argv.some(a => a.includes('--remote-debugging-port='));
-                if (hasFlag) {
-                    await showCDPConnectionPopup();
-                }
+                await showCDPConnectionPopup();
             }
             return; // Don't change state - toggle stays OFF
         }
@@ -1498,14 +1255,8 @@ async function handleToggle(context) {
         // Do CDP operations in background (don't block toggle)
         if (isEnabled) {
             log('Multi Purpose: Enabled');
-            if (scheduler) {
-                scheduler.start();
-            }
             // These operations happen in background
-            ensureCDPOrPrompt(true).then(async () => {
-                await startPolling();
-                await startHybridAutoAccept();
-            });
+            ensureCDPOrPrompt(true).then(() => startPolling());
             startStatsCollection(context);
             incrementSessionCount(context);
         } else {
@@ -1520,7 +1271,6 @@ async function handleToggle(context) {
 
             // Fire-and-forget: collect stats and stop in background
             collectAndSaveStats(context).catch(() => { });
-            stopHybridAutoAccept().catch(() => { });
             stopPolling().catch(() => { });
         }
 
@@ -1569,12 +1319,8 @@ async function syncSessions() {
             await cdpHandler.start({
                 pollInterval: pollFrequency,
                 ide: currentIDE,
-                bannedCommands: bannedCommands,
-                ...getCdpBehaviorConfig()
+                bannedCommands: bannedCommands
             });
-            if (hybridAutoAccept) {
-                hybridAutoAccept.updateConfig(getHybridRuntimeConfig());
-            }
         } catch (err) {
             log(`CDP: Sync error: ${err.message}`);
         }
@@ -1651,7 +1397,6 @@ async function stopPolling() {
         statsCollectionTimer = null;
     }
     if (scheduler) scheduler.stop();
-    await stopHybridAutoAccept();
     if (cdpHandler) await cdpHandler.stop();
     log('Multi Purpose: Polling stopped');
 }
@@ -1804,6 +1549,7 @@ async function showAwayActionsNotification(context, actionsCount) {
 
 // --- AWAY MODE POLLING ---
 // Check for "away actions" when user returns (called periodically)
+let lastAwayCheck = Date.now();
 async function checkForAwayActions(context) {
     log(`[Away] checkForAwayActions called. cdpHandler=${!!cdpHandler}, isEnabled=${isEnabled}`);
     if (!cdpHandler || !isEnabled) {
@@ -2125,12 +1871,80 @@ function handleToggleAntigravityQuota(enabled) {
     }
 }
 
+// --- Debug HTTP Server ---
+function startDebugServer() {
+    if (debugServer) return;
+
+    // Check if debug mode is enabled
+    const debugEnabled = vscode.workspace.getConfiguration('auto-accept.debugMode').get('enabled', false);
+    if (!debugEnabled) return;
+
+    try {
+        debugServer = http.createServer(async (req, res) => {
+            // CORS headers
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+            if (req.method === 'OPTIONS') {
+                res.writeHead(200);
+                res.end();
+                return;
+            }
+
+            if (req.method !== 'POST') {
+                res.writeHead(405);
+                res.end('Method not allowed');
+                return;
+            }
+
+            let body = '';
+            req.on('data', chunk => { body += chunk.toString(); });
+            req.on('end', async () => {
+                try {
+                    let data = {};
+                    if (body) {
+                        data = JSON.parse(body);
+                    }
+                    const { action, params } = data;
+                    log(`[DebugServer] Received action: ${action}`);
+
+                    const result = await vscode.commands.executeCommand('auto-accept.debugCommand', action, params);
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(result));
+                } catch (e) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: e.message }));
+                }
+            });
+        });
+
+        debugServer.listen(54321, '127.0.0.1', () => {
+            log('Debug Server running on http://127.0.0.1:54321');
+        });
+
+        debugServer.on('error', (e) => {
+            log(`Debug Server Error: ${e.message}`);
+            debugServer = null;
+        });
+
+    } catch (e) {
+        log(`Failed to start Debug Server: ${e.message}`);
+    }
+}
+
+function stopDebugServer() {
+    if (debugServer) {
+        debugServer.close();
+        debugServer = null;
+        log('Debug Server stopped');
+    }
+}
+
 async function deactivate() {
     stopPolling();
     stopQuotaPolling();
-    if (debugHandler) {
-        debugHandler.stopServer();
-    }
+    stopDebugServer();
     if (cdpHandler) {
         cdpHandler.stop();
     }
@@ -2148,7 +1962,6 @@ async function deactivate() {
             await globalContext.globalState.update(ROI_STATS_KEY, undefined);
             await globalContext.globalState.update(CDP_SETUP_COMPLETED_KEY, undefined);
             await globalContext.globalState.update(EXTENSION_VERSION_KEY, undefined);
-            await globalContext.globalState.update(BOOT_RELAUNCH_PROMPTED_KEY, undefined);
         } catch (e) {
             // Ignore cleanup errors
         }

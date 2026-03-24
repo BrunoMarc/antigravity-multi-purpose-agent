@@ -10,24 +10,205 @@
     if (typeof window === 'undefined') return;
 
     // ============================================================
-    // ANALYTICS MODULE (Standalone - loaded from external module)
-    // See: main_scripts/analytics/ for the analytics module source
-    // The standalone module is loaded BEFORE this script in the injection chain
-    // We access it via window.Analytics or Analytics global
+    // ANALYTICS MODULE (Embedded)
+    // Clean, modular analytics with separated concerns.
+    // See: main_scripts/analytics/ for standalone module files
     // ============================================================
+    const Analytics = (function () {
+        // --- Constants ---
+        const TERMINAL_KEYWORDS = ['run', 'execute', 'command', 'terminal'];
+        const SECONDS_PER_CLICK = 5;
+        const TIME_VARIANCE = 0.2;
 
-    // Get Analytics from standalone module (loaded before this script)
-    const Analytics = (typeof window !== 'undefined' && window.Analytics) 
-        ? window.Analytics 
-        : (typeof Analytics !== 'undefined' ? Analytics : null);
+        const ActionType = {
+            FILE_EDIT: 'file_edit',
+            TERMINAL_COMMAND: 'terminal_command'
+        };
 
-    // Get Utils from standalone module (loaded before this script)
-    const Utils = (typeof window !== 'undefined' && window.Utils) 
-        ? window.Utils 
-        : (typeof Utils !== 'undefined' ? Utils : null);
+        // --- State Management ---
+        function createDefaultStats() {
+            return {
+                clicksThisSession: 0,
+                blockedThisSession: 0,
+                sessionStartTime: null,
+                fileEditsThisSession: 0,
+                terminalCommandsThisSession: 0,
+                actionsWhileAway: 0,
+                isWindowFocused: true,
+                lastConversationUrl: null,
+                lastConversationStats: null
+            };
+        }
+
+        function getStats() {
+            return window.__autoAcceptState?.stats || createDefaultStats();
+        }
+
+        function getStatsMutable() {
+            return window.__autoAcceptState.stats;
+        }
+
+        // --- Click Tracking ---
+        function categorizeClick(buttonText) {
+            const text = (buttonText || '').toLowerCase();
+            for (const keyword of TERMINAL_KEYWORDS) {
+                if (text.includes(keyword)) return ActionType.TERMINAL_COMMAND;
+            }
+            return ActionType.FILE_EDIT;
+        }
+
+        function trackClick(buttonText, log) {
+            const stats = getStatsMutable();
+            stats.clicksThisSession++;
+            log(`[Stats] Click tracked. Total: ${stats.clicksThisSession}`);
+
+            const category = categorizeClick(buttonText);
+            if (category === ActionType.TERMINAL_COMMAND) {
+                stats.terminalCommandsThisSession++;
+                log(`[Stats] Terminal command. Total: ${stats.terminalCommandsThisSession}`);
+            } else {
+                stats.fileEditsThisSession++;
+                log(`[Stats] File edit. Total: ${stats.fileEditsThisSession}`);
+            }
+
+            let isAway = false;
+            if (!stats.isWindowFocused) {
+                stats.actionsWhileAway++;
+                isAway = true;
+                log(`[Stats] Away action. Total away: ${stats.actionsWhileAway}`);
+            }
+
+            return { category, isAway, totalClicks: stats.clicksThisSession };
+        }
+
+        function trackBlocked(log) {
+            const stats = getStatsMutable();
+            stats.blockedThisSession++;
+            log(`[Stats] Blocked. Total: ${stats.blockedThisSession}`);
+        }
+
+        // --- ROI Reporting ---
+        function collectROI(log) {
+            const stats = getStatsMutable();
+            const collected = {
+                clicks: stats.clicksThisSession || 0,
+                blocked: stats.blockedThisSession || 0,
+                sessionStart: stats.sessionStartTime
+            };
+            log(`[ROI] Collected: ${collected.clicks} clicks, ${collected.blocked} blocked`);
+            stats.clicksThisSession = 0;
+            stats.blockedThisSession = 0;
+            stats.sessionStartTime = Date.now();
+            return collected;
+        }
+
+        // --- Session Summary ---
+        function getSessionSummary() {
+            const stats = getStats();
+            const clicks = stats.clicksThisSession || 0;
+            const baseSecs = clicks * SECONDS_PER_CLICK;
+            const minMins = Math.max(1, Math.floor((baseSecs * (1 - TIME_VARIANCE)) / 60));
+            const maxMins = Math.ceil((baseSecs * (1 + TIME_VARIANCE)) / 60);
+
+            return {
+                clicks,
+                fileEdits: stats.fileEditsThisSession || 0,
+                terminalCommands: stats.terminalCommandsThisSession || 0,
+                blocked: stats.blockedThisSession || 0,
+                estimatedTimeSaved: clicks > 0 ? `${minMins}–${maxMins} minutes` : null
+            };
+        }
+
+        // --- Away Actions ---
+        function consumeAwayActions(log) {
+            const stats = getStatsMutable();
+            const count = stats.actionsWhileAway || 0;
+            log(`[Away] Consuming away actions: ${count}`);
+            stats.actionsWhileAway = 0;
+            return count;
+        }
+
+        function isUserAway() {
+            return !getStats().isWindowFocused;
+        }
+
+        // --- Focus Management ---
+        // NOTE: Browser-side focus events are UNRELIABLE in webview contexts.
+        // The VS Code extension pushes the authoritative focus state via __autoAcceptSetFocusState.
+        // We only keep a minimal initializer here that defaults to focused=true.
+
+        function initializeFocusState(log) {
+            const state = window.__autoAcceptState;
+            if (state && state.stats) {
+                // Default to focused (assume user is present) - extension will correct this
+                state.stats.isWindowFocused = true;
+                log('[Focus] Initialized (awaiting extension sync)');
+            }
+        }
+
+        // --- Initialization ---
+        function initialize(log) {
+            if (!window.__autoAcceptState) {
+                window.__autoAcceptState = {
+                    isRunning: false,
+                    tabNames: [],
+                    sessionID: 0,
+                    currentMode: null,
+                    bannedCommands: [],
+                    stats: createDefaultStats()
+                };
+                log('[Analytics] State initialized');
+            } else if (!window.__autoAcceptState.stats) {
+                window.__autoAcceptState.stats = createDefaultStats();
+                log('[Analytics] Stats added to existing state');
+            } else {
+                const s = window.__autoAcceptState.stats;
+                if (s.actionsWhileAway === undefined) s.actionsWhileAway = 0;
+                if (s.isWindowFocused === undefined) s.isWindowFocused = true;
+                if (s.fileEditsThisSession === undefined) s.fileEditsThisSession = 0;
+                if (s.terminalCommandsThisSession === undefined) s.terminalCommandsThisSession = 0;
+            }
+
+            initializeFocusState(log);
+
+            if (!window.__autoAcceptState.stats.sessionStartTime) {
+                window.__autoAcceptState.stats.sessionStartTime = Date.now();
+            }
+
+            log('[Analytics] Initialized');
+        }
+
+        // Set focus state (called from extension via CDP)
+        function setFocusState(isFocused, log) {
+            const state = window.__autoAcceptState;
+            if (!state || !state.stats) return;
+
+            const wasAway = !state.stats.isWindowFocused;
+            state.stats.isWindowFocused = isFocused;
+
+            if (log) {
+                log(`[Focus] Extension sync: focused=${isFocused}, wasAway=${wasAway}`);
+            }
+        }
+
+        // Public API
+        return {
+            initialize,
+            trackClick,
+            trackBlocked,
+            categorizeClick,
+            ActionType,
+            collectROI,
+            getSessionSummary,
+            consumeAwayActions,
+            isUserAway,
+            getStats,
+            setFocusState
+        };
+    })();
 
     // --- LOGGING ---
-    const log = (msg) => {
+    const log = (msg, isSuccess = false) => {
         // Simple log for CDP interception
         console.log(`[AutoAccept] ${msg}`);
     };
@@ -35,31 +216,47 @@
     // Initialize Analytics
     Analytics.initialize(log);
 
-    // --- CENTRALIZED ACCEPT/REJECT PATTERNS ---
-    // Use patterns from Utils module (loaded before this script)
-    var CENTRALIZED_ACCEPT_PATTERNS = (Utils && Utils.ACCEPT_PATTERNS)
-        ? Utils.ACCEPT_PATTERNS
-        : ['accept', 'allow', 'continue', 'proceed', 'apply', 'confirm', 'yes', 'ok', 'save'];
-
-    // Pre-compiled word-boundary regex for accept/reject matching (prevents false positives)
-    var ACCEPT_WORD_REGEX = (Utils && Utils.buildWordBoundaryRegex)
-        ? Utils.buildWordBoundaryRegex(CENTRALIZED_ACCEPT_PATTERNS)
-        : new RegExp('\\b(' + CENTRALIZED_ACCEPT_PATTERNS.join('|') + ')\\b', 'i');
-    var REJECT_WORD_REGEX = (Utils && Utils.REJECT_PATTERNS && Utils.buildWordBoundaryRegex)
-        ? Utils.buildWordBoundaryRegex(Utils.REJECT_PATTERNS)
-        : new RegExp('\\b(reject|cancel|discard|deny|skip|close|no|delete)\\b', 'i');
-
-    // CamelCase normalization: "RunAlt+↵" → "Run Alt+↵" for proper word-boundary matching
-    var normalizeButtonText = (Utils && Utils.normalizeButtonText)
-        ? Utils.normalizeButtonText
-        : function(text) { return text ? text.replace(/([a-z])([A-Z])/g, '$1 $2') : ''; };
-
     // --- 1. UTILS ---
-    // Use Utils functions from standalone module (loaded before this script)
-    const getDocuments = Utils.getDocuments;
-    const queryAll = Utils.queryAll;
-    const stripTimeSuffix = Utils.stripTimeSuffix;
-    const deduplicateNames = Utils.deduplicateNames;
+    const getDocuments = (root = document) => {
+        let docs = [root];
+        try {
+            const iframes = root.querySelectorAll('iframe, frame');
+            for (const iframe of iframes) {
+                try {
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+                    if (iframeDoc) docs.push(...getDocuments(iframeDoc));
+                } catch (e) { }
+            }
+        } catch (e) { }
+        return docs;
+    };
+
+    const queryAll = (selector) => {
+        const results = [];
+        getDocuments().forEach(doc => {
+            try { results.push(...Array.from(doc.querySelectorAll(selector))); } catch (e) { }
+        });
+        return results;
+    };
+
+    // Helper to strip time suffixes like "3m", "4h", "12s"
+    const stripTimeSuffix = (text) => {
+        return (text || '').trim().replace(/\s*\d+[smh]$/, '').trim();
+    };
+
+    // Helper to deduplicate tab names by appending (2), (3), etc.
+    const deduplicateNames = (names) => {
+        const counts = {};
+        return names.map(name => {
+            if (counts[name] === undefined) {
+                counts[name] = 1;
+                return name;
+            } else {
+                counts[name]++;
+                return `${name} (${counts[name]})`;
+            }
+        });
+    };
 
     const updateTabNames = (tabs) => {
         const rawNames = Array.from(tabs).map(tab => stripTimeSuffix(tab.textContent));
@@ -245,80 +442,13 @@
     }
 
     // --- 4. CLICKING LOGIC ---
-    // data-testid selectors for i18n-safe targeting (priority order)
-    const TESTID_ACCEPT_SELECTORS = [
-        'allow',
-        'accept',
-        'continue',
-        'proceed',
-        'accept-button',
-        'accept-all-button',
-        'apply-button',
-        'confirm-button'
-    ];
-
-    // Excluded testid selectors (reject/cancel actions)
-    const TESTID_EXCLUDED_SELECTORS = [
-        'reject',
-        'cancel',
-        'discard',
-        'deny',
-        'reject-button',
-        'cancel-button',
-        'discard-button',
-        'deny-button'
-    ];
-
-    /**
-     * Check if element matches a data-testid accept selector
-     * @param {Element} el - Element to check
-     * @returns {{isMatch: boolean, testId: string|null}}
-     */
-    function checkTestIdSelector(el) {
-        const testId = el.getAttribute('data-testid');
-        if (!testId) return { isMatch: false, testId: null };
-        
-        // Check if it's an excluded testId
-        if (TESTID_EXCLUDED_SELECTORS.includes(testId.toLowerCase())) {
-            return { isMatch: false, testId: testId };
-        }
-        
-        // Check if it's an accept testId
-        if (TESTID_ACCEPT_SELECTORS.includes(testId.toLowerCase())) {
-            return { isMatch: true, testId: testId };
-        }
-        
-        return { isMatch: false, testId: null };
-    }
-
-    function isPotentialCommandTestId(testId) {
-        const tid = String(testId || '').toLowerCase();
-        return tid.includes('run') || tid.includes('execute') || tid.includes('terminal') || tid.includes('command');
-    }
-
     function isAcceptButton(el) {
-        // Never click anchor links — they navigate away and cause infinite loops
-        if (el.tagName === 'A' && el.hasAttribute('href')) return false;
-
-        // Priority 1: Check data-testid attribute (i18n-safe)
-        const testIdResult = checkTestIdSelector(el);
-        if (testIdResult.isMatch) {
-            // Verify element is visible and interactive
-            const style = window.getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            if (style.display !== 'none' && rect.width > 0 && style.pointerEvents !== 'none' && !el.disabled) {
-                log(`[TestId] Found accept button with data-testid="${testIdResult.testId}"`);
-                return true;
-            }
-        }
-        
-        // Priority 2: Word-boundary text content matching using centralized patterns
-        const rawText = (el.textContent || "").trim();
-        if (rawText.length === 0 || rawText.length > 50) return false;
-        const text = normalizeButtonText(rawText).toLowerCase();
-        // Word-boundary matching prevents false positives (e.g. "ok" matching "kokoro")
-        if (REJECT_WORD_REGEX.test(text)) return false;
-        if (!ACCEPT_WORD_REGEX.test(text)) return false;
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text.length === 0 || text.length > 50) return false;
+        const patterns = ['accept', 'run', 'retry', 'apply', 'execute', 'confirm', 'allow once', 'allow'];
+        const rejects = ['skip', 'reject', 'cancel', 'close', 'refine', 'always'];
+        if (rejects.some(r => text.includes(r))) return false;
+        if (!patterns.some(p => text.includes(p))) return false;
 
         // Check if this is a command execution button by looking for "run command" or similar
         const isCommandButton = text.includes('run command') || text.includes('execute') || text.includes('run');
@@ -334,183 +464,20 @@
 
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
-        const MIN_OPACITY_THRESHOLD = 0.1;
-        const opacity = parseFloat(style.opacity);
-        return style.display !== 'none' && 
-               style.visibility !== 'hidden' &&
-               (isNaN(opacity) || opacity > MIN_OPACITY_THRESHOLD) &&
-               rect.width > 0 && 
-               rect.height > 0 &&
-               style.pointerEvents !== 'none' && 
-               !el.disabled;
+        return style.display !== 'none' && rect.width > 0 && style.pointerEvents !== 'none' && !el.disabled;
     }
 
     /**
      * Check if an element is still visible in the DOM.
-     * Uses standardized visibility checks (matches utils.js isElementVisible)
      * @param {Element} el - Element to check
      * @returns {boolean} True if element is visible
      */
-    // Use Utils function from standalone module (loaded before this script)
-    const isElementVisible = Utils.isElementVisible;
-
-    // ============================================================
-    // DOM ACTIVITY TRACKING
-    // MutationObserver-based tracking for more accurate silence detection
-    // ============================================================
-
-    /**
-     * Start DOM activity tracking with MutationObserver.
-     * @param {Element} rootEl - Root element to observe
-     */
-    function startDomActivityTracking(rootEl) {
-        const state = window.__autoAcceptState;
-        if (!state) return;
-
-        if (state.domActivityObserver) {
-            state.domActivityObserver.disconnect();
-        }
-
-        let last = 0;
-        state.domActivityObserver = new MutationObserver(() => {
-            const now = Date.now();
-            // Throttle to max 1 update per second
-            if (now - last < 1000) return;
-            last = now;
-
-            state.lastDomActivityTime = now;
-
-            // Also update analytics
-            if (typeof Analytics !== 'undefined' && Analytics.markDomActivity) {
-                Analytics.markDomActivity(now, log);
-            }
-
-            log('[DOM Activity] Mutation detected at', now);
-        });
-
-        // Observe the entire document for changes
-        state.domActivityObserver.observe(rootEl, {
-            subtree: true,
-            childList: true,
-            characterData: true,
-            attributes: true,
-            attributeFilter: ['class', 'style', 'disabled', 'aria-busy', 'aria-disabled']
-        });
-
-        log('[DOM Activity] Observer started');
+    function isElementVisible(el) {
+        if (!el || !el.isConnected) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && rect.width > 0 && style.visibility !== 'hidden';
     }
-
-    /**
-     * Stop DOM activity tracking.
-     */
-    function stopDomActivityTracking() {
-        const state = window.__autoAcceptState;
-        if (state && state.domActivityObserver) {
-            state.domActivityObserver.disconnect();
-            state.domActivityObserver = null;
-            log('[DOM Activity] Observer stopped');
-        }
-    }
-
-    /**
-     * Get DOM activity info.
-     * @returns {Object} DOM activity information
-     */
-    function getDomActivityInfo() {
-        const state = window.__autoAcceptState;
-        const lastActivity = state?.lastDomActivityTime || 0;
-        return {
-            lastDomActivityTime: lastActivity,
-            msSinceLastActivity: lastActivity ? Date.now() - lastActivity : -1,
-            isTracking: state?.domActivityObserver !== null,
-            ts: Date.now()
-        };
-    }
-
-    /**
-     * Detect if AI is working (generating response).
-     * @param {Element} rootEl - Root element to search
-     * @returns {boolean} True if AI appears to be working
-     */
-    function detectConversationWorking(rootEl) {
-        // Check 1: animate-markdown class — Antigravity's primary busy signal.
-        // Present on <P> elements while AI is actively streaming text, removed when done.
-        const animating = rootEl.querySelectorAll('.animate-markdown');
-        if (animating && animating.length > 0) {
-            return true;
-        }
-
-        // Check 2: aria-busy="true"
-        const busyEl = rootEl.querySelector('[aria-busy="true"]');
-        if (busyEl) {
-            return true;
-        }
-
-        // Check 3: Stop/Cancel buttons
-        const stopButtons = rootEl.querySelectorAll('button');
-        for (const btn of stopButtons) {
-            const directText = Array.from(btn.childNodes)
-                .filter(n => n.nodeType === 3)
-                .map(n => n.textContent.trim().toLowerCase())
-                .join(' ');
-            const labelText = (directText || (btn.getAttribute('aria-label') || '').toLowerCase());
-            const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
-            if (labelText.length > 0 && labelText.length < 30 &&
-                (labelText === 'stop' || labelText === 'cancel' || labelText === 'stop generating' ||
-                 testId === 'stop' || testId === 'cancel' || testId === 'stop-generating')) {
-                if (isElementVisible(btn)) {
-                    return true;
-                }
-            }
-        }
-
-        // Check 4: Loading/spinner indicators (only inside agent panel, not document-wide)
-        if (rootEl !== document && rootEl !== document.body) {
-            const loadingIndicators = rootEl.querySelectorAll('[class*="loading"], [class*="spinner"]');
-            for (const indicator of loadingIndicators) {
-                if (isElementVisible(indicator)) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Get a snapshot of the conversation state for external comparison.
-     * The scheduler uses this to detect when AI starts/stops responding.
-     */
-    window.__autoAcceptGetConversationSnapshot = function () {
-        try {
-            const panel = getAntigravityAgentPanelRoot();
-            // Use panel if found; fall back to document.body (not document, which has no innerText)
-            const root = panel || document.body;
-            const text = root.innerText || '';
-            // Use #conversation for accurate message area text, if available
-            const conv = document.getElementById('conversation');
-            const convText = conv ? (conv.innerText || '') : text;
-            const busy = detectConversationWorking(panel || root);
-            return {
-                textLength: convText.length,
-                messageCount: 0,
-                busy: busy,
-                ts: Date.now()
-            };
-        } catch (e) {
-            return { textLength: 0, messageCount: 0, busy: false, ts: Date.now(), error: e.message };
-        }
-    };
-
-    window.__autoAcceptIsConversationWorking = function () {
-        try {
-            const panel = getAntigravityAgentPanelRoot();
-            const root = panel || document.body;
-            return !!detectConversationWorking(root);
-        } catch (e) {
-            return false;
-        }
-    };
 
     /**
      * Wait for an element to disappear (removed from DOM or hidden).
@@ -536,97 +503,29 @@
     }
 
     async function performClick(selectors) {
-        const CLICK_COOLDOWN_MS = 10000;
-        const isCoolingDown = (el) => {
-            try {
-                const ts = Number(el?.dataset?.autoAcceptLastClickedTs || 0);
-                return ts > 0 && (Date.now() - ts) < CLICK_COOLDOWN_MS;
-            } catch (e) {
-                return false;
-            }
-        };
-        const markClicked = (el) => {
-            try {
-                if (el?.dataset) {
-                    el.dataset.autoAcceptLastClickedTs = String(Date.now());
-                }
-            } catch (e) { }
-        };
-
         const found = [];
-        selectors.forEach(s => queryAll(s).forEach(el => {
-            // Skip anchor links — clicking them navigates away and causes infinite loops
-            if (el.tagName === 'A' && el.hasAttribute('href')) return;
-            found.push(el);
-        }));
+        selectors.forEach(s => queryAll(s).forEach(el => found.push(el)));
         let clicked = 0;
         let verified = 0;
         const uniqueFound = [...new Set(found)];
 
-        // Priority 1: First try data-testid selectors (i18n-safe)
-        for (const testId of TESTID_ACCEPT_SELECTORS) {
-            const testIdElements = queryAll(`[data-testid="${testId}"]`);
-            for (const el of testIdElements) {
-                if (!el.isConnected) continue;
-                if (isCoolingDown(el)) continue;
-
-                if (isPotentialCommandTestId(testId)) {
-                    const nearbyText = findNearbyCommandText(el);
-                    if (isCommandBanned(nearbyText, el)) {
-                        log(`[BANNED] Skipping data-testid click: "${testId}" - command is banned`);
-                        continue;
-                    }
-                }
-                
-                const style = window.getComputedStyle(el);
-                const rect = el.getBoundingClientRect();
-                if (style.display === 'none' || rect.width === 0 || style.pointerEvents === 'none' || el.disabled) continue;
-
-                const rawLabel = ((el.textContent || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).trim();
-                if (!rawLabel || rawLabel.length < 2) continue;
-                const visibleLabel = normalizeButtonText(rawLabel).toLowerCase();
-                // Word-boundary matching prevents false positives
-                if (!ACCEPT_WORD_REGEX.test(visibleLabel)) continue;
-                
-                log(`[TestId] Clicking element with data-testid="${testId}"`);
-                markClicked(el);
-                el.click();
-                clicked++;
-                
-                const disappeared = await waitForDisappear(el);
-                if (disappeared) {
-                    Analytics.trackClick(`[data-testid="${testId}"]`, log);
-                    verified++;
-                    log(`[Stats] Click verified (button disappeared)`);
-                }
-                
-                // Return after first successful testId click
-                if (verified > 0) {
-                    log(`[Click] TestId selectors: Attempted: ${clicked}, Verified: ${verified}`);
-                    return verified;
-                }
-            }
-        }
-
-        // Priority 2: Fall back to text content matching
         for (const el of uniqueFound) {
             // Check if element is still valid (might have been removed by previous click in this loop)
             if (!el.isConnected) continue;
-            if (isCoolingDown(el)) continue;
 
             if (isAcceptButton(el)) {
                 const buttonText = (el.textContent || "").trim();
                 log(`Clicking: "${buttonText}"`);
 
-                // Use el.click() for more reliable event dispatch
-                markClicked(el);
-                el.click();
+                // Dispatch click
+                el.dispatchEvent(new MouseEvent('click', { view: window, bubbles: true, cancelable: true }));
                 clicked++;
 
                 // Wait for button to disappear (verification)
                 const disappeared = await waitForDisappear(el);
 
                 if (disappeared) {
+                    // Only count if button actually disappeared (action was successful)
                     Analytics.trackClick(buttonText, log);
                     verified++;
                     log(`[Stats] Click verified (button disappeared)`);
@@ -642,103 +541,7 @@
         return verified;
     }
 
-    // --- 4. CONTINUE BUTTON AUTO-CLICK ---
-    // Thinking limit text patterns to detect
-    const THINKING_LIMIT_PATTERNS = [
-        'model thinking limit reached',
-        'thinking limit reached',
-        'token limit reached',
-        'context limit reached',
-        'context window full',
-        'maximum context',
-        'conversation too long'
-    ];
-
-    /**
-     * Check if text matches any thinking limit pattern
-     * @param {string} rawText - Text to check
-     * @returns {boolean} True if matches a thinking limit pattern
-     */
-    function matchesThinkingLimitText(rawText) {
-        const text = (rawText || '').toLowerCase();
-        return THINKING_LIMIT_PATTERNS.some(pattern => text.includes(pattern));
-    }
-
-    /**
-     * Find a Continue button candidate near thinking limit messages
-     * @param {Element} rootEl - Root element to search within
-     * @returns {Element|null} Continue button element or null
-     */
-    function findThinkingLimitContinueCandidate(rootEl) {
-        // Check for banners with continue buttons
-        const banners = rootEl.querySelectorAll('[class*="banner"], [class*="sticky"], [role="alert"]');
-        for (const banner of banners) {
-            if (matchesThinkingLimitText(banner.textContent)) {
-                const btn = banner.querySelector('button');
-                if (btn && isElementVisible(btn) && isClickable(btn)) {
-                    log(`[Continue] Found Continue button in banner`);
-                    return btn;
-                }
-            }
-        }
-
-        // Also look for buttons with continue-related testids or classes
-        const continueSelectors = [
-            'button[data-testid*="continue"]',
-            'button[class*="continue"]'
-        ];
-        
-        for (const selector of continueSelectors) {
-            const buttons = rootEl.querySelectorAll(selector);
-            for (const btn of buttons) {
-                if (isElementVisible(btn) && isClickable(btn)) {
-                    // Check if there's a thinking limit message nearby
-                    const parent = btn.closest('[class*="banner"], [class*="sticky"], [role="alert"]');
-                    if (parent && matchesThinkingLimitText(parent.textContent)) {
-                        log(`[Continue] Found Continue button via selector: ${selector}`);
-                        return btn;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Check if thinking limit message is present in the document
-     * @param {Element} rootEl - Root element to search within
-     * @returns {boolean} True if thinking limit message found
-     */
-    function hasThinkingLimitMessage(rootEl) {
-        const allText = rootEl.textContent || '';
-        return matchesThinkingLimitText(allText);
-    }
-
-    /**
-     * Click Continue button if present and thinking limit detected
-     * @param {Element} rootEl - Root element to search within
-     * @returns {Promise<boolean>} True if button was clicked
-     */
-    async function clickContinueIfPresent(rootEl) {
-        const state = window.__autoAcceptState;
-        
-        // Check if continue policy allows auto-click
-        if (state.continuePolicy === 'ask') {
-            return false;
-        }
-
-        let btn = findThinkingLimitContinueCandidate(rootEl);
-        if (btn && hasThinkingLimitMessage(rootEl)) {
-            log(`[Continue] Clicking Continue button for thinking limit`);
-            btn.dispatchEvent(new MouseEvent('click', { view: window, bubbles: true, cancelable: true }));
-            Analytics.trackClick('Continue', log);
-            return true;
-        }
-        return false;
-    }
-
-    // --- 5. LIFECYCLE API ---
+    // --- 4. LIFECYCLE API ---
     // --- Update banned commands list ---
     window.__autoAcceptUpdateBannedCommands = function (bannedList) {
         const state = window.__autoAcceptState;
@@ -762,6 +565,108 @@
         };
     };
 
+    // --- Detect if Agent is busy (generating/running) ---
+    window.__autoAcceptIsBusy = function () {
+        try {
+            const buttons = queryAll('button, [role="button"]');
+            for (const btn of buttons) {
+                if (!isElementVisible(btn)) continue;
+                
+                // Get all text and label attributes
+                const text = (btn.textContent || '').trim();
+                const textLower = text.toLowerCase();
+                const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase().trim();
+                const title = (btn.getAttribute('title') || '').toLowerCase().trim();
+                const combined = textLower + ' ' + ariaLabel + ' ' + title;
+                
+                // Rule 1: Explicit AI generating states
+                if (combined.includes('stop generating') || combined.includes('cancel generation')) {
+                    return true;
+                }
+                
+                // Rule 2: The specific 'Cancel' or 'Stop' button (like the red square icon)
+                // We ensure it EXACTLY matches 'cancel' or 'stop' in the title or aria-label
+                if (title === 'cancel' || title === 'stop' || ariaLabel === 'cancel' || ariaLabel === 'stop') {
+                    // To prevent false positives on global modal dialogs (which usually have text "Cancel"),
+                    // we require that the button is an icon button (has an SVG or no visible text content)
+                    if (textLower === '' || btn.querySelector('svg')) {
+                        return true;
+                    }
+                }
+                
+                // Rule 3: The 'Cancel' text button at the bottom of a running terminal block.
+                // In Antigravity, when a bash command is running, it shows "Running." at the top
+                // and a pure text "Cancel" button at the bottom right next to "Always run".
+                if (text === 'Cancel') {
+                    // To distinguish this from a random IDE Cancel button, we check its siblings/parents
+                    // for the 'Always run' button or 'Running.' text.
+                    let parent = btn.parentElement;
+                    for (let i = 0; i < 6; i++) {
+                        if (parent) {
+                            const html = parent.innerHTML || '';
+                            if (html.includes('Always run') || html.includes('Running')) {
+                                return true;
+                            }
+                            parent = parent.parentElement;
+                        }
+                    }
+                }
+            }
+            
+            // Rule 4: Text labels indicating active background work
+            // (e.g., "Running", "Generating...", "Thinking", "Working...")
+            const statusLabels = queryAll('div, span, p');
+            for (const el of statusLabels) {
+                if (!isElementVisible(el)) continue;
+                
+                // Relaxed node check: Antigravity often puts text like "Running (1/2)" into nested spans
+                const t = el.textContent.trim();
+                // We check that it's short enough to be a status label (not a whole paragraph of text)
+                if (t.length > 0 && t.length < 50) {
+                    const tLower = t.toLowerCase();
+                    if (tLower.startsWith('running') || 
+                        tLower.startsWith('generating') || 
+                        tLower.startsWith('thinking') || 
+                        tLower.startsWith('working')) {
+                        
+                        // IGNORING SETTINGS PANEL: Do not trigger if the word "Running" comes from our own
+                        // extension settings panel ("Queue Status: Running (1/2)").
+                        let isFromSettingsPanel = false;
+                        let p = el.parentElement;
+                        for(let i=0; i<4; i++) {
+                            if (p) {
+                                const html = p.innerHTML || '';
+                                if (html.includes('Queue Status:') || html.includes('Save &amp; Run Queue')) {
+                                    isFromSettingsPanel = true;
+                                    break;
+                                }
+                                p = p.parentElement;
+                            }
+                        }
+                        
+                        if (isFromSettingsPanel) continue;
+
+                        // CRITICAL FIX: Old chat bubbles in history might say "Running (1/2)".
+                        // We ONLY care if the text is near the bottom of the screen (active composer area).
+                        // If it's scrolled way up into history, it's not the active state.
+                        const rect = el.getBoundingClientRect();
+                        const distFromBottom = window.innerHeight - rect.bottom;
+                        
+                        // If the element is within ~500px of the bottom of the window, it's active.
+                        // (If distFromBottom is negative, it's scrolled below the fold, which also counts as active).
+                        if (distFromBottom < 500) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        } catch(e) {
+            return false;
+        }
+    };
+
     // --- Reset stats (called when extension wants to collect and reset) ---
     window.__autoAcceptResetStats = function () {
         return Analytics.collectROI(log);
@@ -781,138 +686,6 @@
     window.__autoAcceptSetFocusState = function (isFocused) {
         Analytics.setFocusState(isFocused, log);
     };
-
-    // --- MutationObserver-based auto-accept (instant, event-driven, no timeouts) ---
-    /**
-     * Start a MutationObserver that watches for DOM mutations and immediately
-     * checks for accept buttons when new elements are added or visibility changes.
-     * This replaces the old poll loop for 100% precise, instant detection.
-     *
-     * @param {object} state - window.__autoAcceptState
-     * @param {number} sessionID - Session guard to stop if session changes
-     */
-    function startAutoAcceptObserver(state, sessionID) {
-        // Clean up any previous observers
-        if (state._autoAcceptObservers) {
-            state._autoAcceptObservers.forEach(function(obs) { obs.disconnect(); });
-        }
-        state._autoAcceptObservers = [];
-
-        let checking = false;
-        let recheckNeeded = false;
-        let lastCheckTime = 0;
-        const MIN_CHECK_INTERVAL_MS = 300; // Minimum ms between observer-triggered checks
-        let pendingTimer = null;
-
-        function runCheck() {
-            if (!state.isRunning || state.sessionID !== sessionID) {
-                // Session changed or stopped — disconnect all observers
-                if (state._autoAcceptObservers) {
-                    state._autoAcceptObservers.forEach(function(obs) { obs.disconnect(); });
-                    state._autoAcceptObservers = [];
-                }
-                if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
-                return;
-            }
-            if (!state.domAutoAcceptEnabled) return;
-
-            if (checking) {
-                recheckNeeded = true;
-                return;
-            }
-
-            // Throttle: if we checked very recently, schedule a deferred check
-            const elapsed = Date.now() - lastCheckTime;
-            if (elapsed < MIN_CHECK_INTERVAL_MS) {
-                if (!pendingTimer) {
-                    pendingTimer = setTimeout(function() {
-                        pendingTimer = null;
-                        runCheck();
-                    }, MIN_CHECK_INTERVAL_MS - elapsed);
-                }
-                return;
-            }
-
-            checking = true;
-            lastCheckTime = Date.now();
-            // Use queueMicrotask to batch rapid mutations from a single DOM operation
-            queueMicrotask(async function() {
-                try {
-                    do {
-                        recheckNeeded = false;
-                        await performClick(['button', '[class*="button"]', '[class*="anysphere"]']);
-
-                        if (state.continuePolicy === 'auto') {
-                            await clickContinueIfPresent(document);
-                        }
-                    } while (recheckNeeded && state.isRunning && state.sessionID === sessionID);
-                } catch (e) {
-                    log(`[Observer] Error in check: ${e.message}`);
-                } finally {
-                    checking = false;
-                }
-            });
-        }
-
-        function onMutation(mutations) {
-            // Only react if new element nodes were added or attributes changed
-            for (let i = 0; i < mutations.length; i++) {
-                const m = mutations[i];
-                if (m.type === 'attributes') {
-                    runCheck();
-                    return;
-                }
-                if (m.type === 'childList' && m.addedNodes.length > 0) {
-                    for (let j = 0; j < m.addedNodes.length; j++) {
-                        if (m.addedNodes[j].nodeType === 1) { // Element node
-                            runCheck();
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-
-        function observeRoot(root) {
-            try {
-                const observer = new MutationObserver(onMutation);
-                observer.observe(root, {
-                    childList: true,
-                    subtree: true,
-                    attributes: true,
-                    attributeFilter: ['style', 'class', 'hidden', 'disabled', 'aria-hidden']
-                });
-                state._autoAcceptObservers.push(observer);
-            } catch (e) { /* ignore unobservable roots */ }
-        }
-
-        // Observe all existing shadow roots recursively
-        function observeShadowRoots(root) {
-            try {
-                if (root.shadowRoot) {
-                    observeRoot(root.shadowRoot);
-                    observeShadowRoots(root.shadowRoot);
-                }
-                var elements = root.querySelectorAll ? root.querySelectorAll('*') : [];
-                for (var k = 0; k < elements.length; k++) {
-                    if (elements[k].shadowRoot) {
-                        observeRoot(elements[k].shadowRoot);
-                        observeShadowRoots(elements[k].shadowRoot);
-                    }
-                }
-            } catch (e) { /* cross-origin or detached */ }
-        }
-
-        // Observe main document
-        observeRoot(document.body || document.documentElement);
-        // Also observe all known shadow roots
-        observeShadowRoots(document);
-
-        log(`[AutoAccept] MutationObserver active (${state._autoAcceptObservers.length} roots observed)`);
-
-        // Run an immediate check for any buttons already in the DOM
-        runCheck();
-    }
 
     window.__autoAcceptStart = function (config) {
         try {
@@ -944,9 +717,6 @@
             state.sessionID++;
             const sid = state.sessionID;
 
-            state.continuePolicy = (config.continuePolicy === 'ask') ? 'ask' : 'auto';
-            state.domAutoAcceptEnabled = config.domAutoAcceptEnabled === true;
-
             // Reset transient per-session state
             state.tabNames = [];
 
@@ -955,21 +725,15 @@
                 state.stats.sessionStartTime = Date.now();
             }
 
-            // Start DOM activity tracking if enabled (default: true)
-            if (config.domActivityTracking !== false) {
-                startDomActivityTracking(document);
-            }
-
             log(`Agent Loaded (IDE: ${ide})`, true);
-            log(`[AutoAccept] DOM auto-accept ${state.domAutoAcceptEnabled ? 'enabled (MutationObserver)' : 'disabled'}`);
 
-            // Use MutationObserver for instant, event-driven button detection.
-            // No timeouts or polling — buttons are clicked the moment they appear in the DOM.
-            if (state.domAutoAcceptEnabled) {
-                startAutoAcceptObserver(state, sid);
-            }
-            
-            // Continue button detection also uses observer (handled inside startAutoAcceptObserver)
+            log(`Starting poll loop...`);
+            (async function pollLoop() {
+                while (state.isRunning && state.sessionID === sid) {
+                    await performClick(['button', '[class*="button"]', '[class*="anysphere"]']);
+                    await new Promise(r => setTimeout(r, config.pollInterval || 1000));
+                }
+            })();
         } catch (e) {
             log(`ERROR in __autoAcceptStart: ${e.message}`);
             console.error('[AutoAccept] Start error:', e);
@@ -982,19 +746,9 @@
             state.isRunning = false;
             state.currentMode = null;
             state.tabNames = [];
-            // Disconnect all MutationObservers
-            if (state._autoAcceptObservers) {
-                state._autoAcceptObservers.forEach(function(obs) { obs.disconnect(); });
-                state._autoAcceptObservers = [];
-            }
         }
-        // Stop DOM activity tracking
-        stopDomActivityTracking();
         log("Agent Stopped.");
     };
-
-    // --- DOM Activity Tracking API ---
-    window.__autoAcceptGetDomActivity = getDomActivityInfo;
 
     // Active conversation helper (used by the queue to target "Current (Active Tab)")
     window.__autoAcceptGetActiveTabName = function () {
@@ -1050,13 +804,7 @@
 
     function getAntigravityAgentPanelRoot() {
         try {
-            // 1. Direct class match — the panel's actual class in Antigravity
-            const byDirectClass = document.querySelector('.antigravity-agent-side-panel');
-            if (byDirectClass) { return byDirectClass; }
-            // 2. Try the ID-based selectors (older Antigravity versions)
-            const byId = document.getElementById('antigravity.agentPanel');
-            if (byId) { return byId; }
-            // 3. Use queryAll (iframe-aware) for nested frame scenarios
+            // Use queryAll (iframe-aware) because the agent panel can live inside nested frames.
             const panels = queryAll('#antigravity\\.agentPanel');
             if (panels && panels.length > 0) {
                 const visible = panels.find(p => {
@@ -1067,12 +815,9 @@
                 });
                 return visible || panels[0];
             }
-            // 4. Broader fallback: class patterns
-            const byClass = document.querySelector('[class*="agentPanel"], [class*="agent-panel"], [class*="agent-side-panel"], [data-testid*="agent"]');
-            if (byClass) { return byClass; }
-            return null;
+            return document.getElementById('antigravity.agentPanel') || document.querySelector('#antigravity\\.agentPanel');
         } catch (e) {
-            try { return document.querySelector('.antigravity-agent-side-panel') || document.getElementById('antigravity.agentPanel'); } catch (e2) { }
+            try { return document.getElementById('antigravity.agentPanel'); } catch (e2) { }
         }
         return null;
     }
@@ -1097,9 +842,6 @@
             // and exclude IME overlay traps.
             const editables = queryAllWithin(root, '[contenteditable]');
             let candidate = null;
-            let bestScore = -1;
-
-            log(`[FindInput] Scanning ${editables.length} contenteditable elements in root=${root === document ? 'document' : (root.id || root.tagName)}`);
 
             for (const el of editables) {
                 const attr = (el.getAttribute && el.getAttribute('contenteditable')) || '';
@@ -1119,43 +861,17 @@
 
                 // Exclude IME overlay + tiny elements
                 if (isProbablyIMEOverlay(className)) continue;
-                if (rect.width < 50 || rect.height < 15) continue;
-
-                // Score each candidate to pick the best
-                let score = 0;
-                score += Math.min(rect.width, 800) / 4;
-                score += Math.min(rect.height, 200) / 4;
+                if (rect.width < 100 || rect.height < 20) continue;
 
                 // Prefer Antigravity chat composer pattern
-                if (c.includes('cursor-text') || c.includes('overflow')) score += 500;
+                if (c.includes('cursor-text') || c.includes('overflow')) return el;
 
-                // Placeholder / aria hints
-                const hint = getInputHint(el).toLowerCase();
-                if (hint.includes('ask') || hint.includes('message') || hint.includes('chat') || hint.includes('prompt') || hint.includes('type')) score += 200;
-
-                // Inside agent panel
-                try { if (el.closest && el.closest('#antigravity\\.agentPanel')) score += 150; } catch (e) { }
-
-                // Role=textbox
-                if (el.getAttribute('role') === 'textbox') score += 80;
-
-                log(`[FindInput] candidate: tag=${el.tagName}, class="${c.substring(0,60)}", rect=${Math.round(rect.width)}x${Math.round(rect.height)}, hint="${hint.substring(0,40)}", score=${score}`);
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    candidate = el;
-                }
-            }
-
-            if (candidate) {
-                log(`[FindInput] Best candidate score=${bestScore}`);
-            } else {
-                log(`[FindInput] No candidate found among ${editables.length} editables`);
+                // Fallback: keep first large-enough element
+                if (!candidate && rect.width > 200) candidate = el;
             }
 
             return candidate;
         } catch (e) {
-            log(`[FindInput] Error: ${e?.message || String(e)}`);
             return null;
         }
     }
@@ -1165,9 +881,17 @@
             const rect = el.getBoundingClientRect();
             const visible = isElementVisible(el);
             if (!visible) return -1;
-            if (rect.width < 50 || rect.height < 15) return -1;
+            if (rect.width < 120 || rect.height < 18) return -1;
 
             const className = el.className || '';
+            const id = el.id || '';
+            
+            // EXPLICITLY REJECT SETTINGS PANEL INPUTS
+            // If the user has the settings panel open, do not paste prompts into the banned commands or check prompt areas.
+            if (id === 'bannedCommandsInput' || id === 'checkPromptText' || id === 'schedulePrompt' || id === 'newPromptInput') {
+                return -1;
+            }
+            
             if (isProbablyIMEOverlay(className)) return -1;
 
             const hint = (getInputHint(el) + ' ' + className).toLowerCase();
@@ -1189,6 +913,12 @@
                     if (el.closest('#antigravity\\.agentPanel')) score += 25;
                     if (el.closest('[class*="chat" i]')) score += 12;
                     if (el.closest('[data-testid*="chat" i]')) score += 12;
+                    
+                    // Strong penalty if it's inside the settings panel container
+                    const parentHtml = el.closest('.container')?.innerHTML || '';
+                    if (parentHtml.includes('Multi Purpose') || parentHtml.includes('Impact Dashboard')) {
+                        return -1;
+                    }
                 }
             } catch (e) { }
 
@@ -1215,29 +945,15 @@
         return candidates.length > 0 ? candidates[0].el : null;
     }
 
-    /**
-     * Check if an element is clickable.
-     * Uses standardized visibility checks (matches utils.js isElementClickable)
-     */
     function isClickable(el) {
         try {
-            if (!el || !el.isConnected) return false;
+            if (!el) return false;
             const rect = el.getBoundingClientRect();
             if (rect.width < 10 || rect.height < 10) return false;
             const win = el.ownerDocument?.defaultView || window;
             const style = win.getComputedStyle(el);
-            const MIN_OPACITY_THRESHOLD = 0.1;
-            const opacity = parseFloat(style.opacity);
-            
-            // Check display
-            if (style.display === 'none') return false;
-            // Check visibility
-            if (style.visibility === 'hidden') return false;
-            // Check opacity (standardized threshold)
-            if (isNaN(opacity) || opacity <= MIN_OPACITY_THRESHOLD) return false;
-            // Check disabled
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
             if ('disabled' in el && el.disabled) return false;
-            if (el.hasAttribute && el.hasAttribute('disabled')) return false;
             return true;
         } catch (e) {
             return false;
@@ -1405,7 +1121,7 @@
             try {
                 if (!snippet) return false;
                 const sn = snippet.toLowerCase();
-                const candidates = queryAll('div,span,p,li,pre,code,blockquote').slice(0, 1200);
+                const candidates = queryAll('div,span,p,li,pre,code,blockquote');
                 for (const el of candidates) {
                     if (!el || !isElementVisible(el)) continue;
                     if (elementContainsInput(el)) continue;
@@ -1432,45 +1148,16 @@
         return transcriptHasSnippet();
     }
 
-    function wasComposerMutatedAfterSubmit(inputBox, originalText) {
-        try {
-            const current = (getInputValue(inputBox) || '').replace(/\s+/g, ' ').trim();
-            const original = String(originalText || '').replace(/\s+/g, ' ').trim();
-            if (!original) return false;
-            if (!current) return true;
-
-            // If composer no longer matches the original prompt text exactly,
-            // treat this as a likely successful submit or editor handoff.
-            if (current !== original) {
-                // Guard against simple Enter newline that keeps the same content.
-                const normalizedCurrent = current.replace(/\n/g, ' ').trim();
-                const normalizedOriginal = original.replace(/\n/g, ' ').trim();
-                return normalizedCurrent !== normalizedOriginal;
-            }
-            return false;
-        } catch (e) {
-            return false;
-        }
-    }
-
     window.__autoAcceptProbePrompt = function () {
         try {
             const panel = getAntigravityAgentPanelRoot();
             const root = panel || document;
-            log(`[Probe] panel=${!!panel}, root=${root === document ? 'document' : (root.id || root.tagName)}`);
             let inputBox = findAntigravityChatInputContentEditable(root);
-            if (!inputBox && panel) {
-                // If agent panel found but no contenteditable inside it, try document-wide
-                log('[Probe] Agent panel found but no input inside; falling back to document');
-                inputBox = findAntigravityChatInputContentEditable(document);
-            }
             if (!inputBox) {
                 // Fallback to the broader heuristic selector (textarea/role=textbox/etc.)
-                log('[Probe] No contenteditable found; trying findBestPromptInput()');
                 inputBox = findBestPromptInput();
             }
             if (!inputBox) {
-                log('[Probe] No input found at all');
                 return {
                     hasInput: false,
                     score: 0,
@@ -1508,18 +1195,11 @@
     window.__autoAcceptSendPrompt = async function (text) {
         try {
             log(`[Prompt] Request to send: "${String(text).substring(0, 50)}..."`);
-            let attemptedSubmit = false;
 
             // Use the documented winning approach for Antigravity chat.
             const panel = getAntigravityAgentPanelRoot();
             const root = panel || document;
             let inputBox = findAntigravityChatInputContentEditable(root);
-
-            // Fallback: try document-wide if panel had no input
-            if (!inputBox && panel) {
-                log('[Prompt] Agent panel found but no input inside; falling back to document');
-                inputBox = findAntigravityChatInputContentEditable(document);
-            }
 
             // Fallback if contenteditable isn't present (some builds render a textarea/ProseMirror).
             const isDocFirst = !!inputBox;
@@ -1569,10 +1249,20 @@
 
             inputBox.focus();
             dispatchEnter();
-            attemptedSubmit = true;
 
-            if (await verifyPromptSent(inputBox, String(text), 1200) || wasComposerMutatedAfterSubmit(inputBox, String(text))) {
-                log('[Prompt] Sent via Enter (verified)');
+            // Verify send by waiting for the composer to clear.
+            const waitForClear = async (timeoutMs) => {
+                const start = Date.now();
+                while (Date.now() - start < timeoutMs) {
+                    await new Promise(r => setTimeout(r, 100));
+                    const current = getInputValue(inputBox);
+                    if (!current) return true;
+                }
+                return false;
+            };
+
+            if (await waitForClear(3500)) {
+                log('[Prompt] Sent via Enter (composer cleared)');
                 return true;
             }
 
@@ -1582,25 +1272,18 @@
             setPromptText(inputBox, text);
             await new Promise(r => setTimeout(r, 150));
             dispatchEnter({ ctrlKey: true });
-            attemptedSubmit = true;
-            if (await verifyPromptSent(inputBox, String(text), 900) || wasComposerMutatedAfterSubmit(inputBox, String(text))) {
-                log('[Prompt] Sent via Ctrl+Enter (verified)');
+            if (await waitForClear(3500)) {
+                log('[Prompt] Sent via Ctrl+Enter (composer cleared)');
                 return true;
             }
 
             const sendBtn = findSendButtonNearInput(inputBox);
             if (sendBtn) {
                 try { sendBtn.click(); } catch (e) { }
-                attemptedSubmit = true;
-                if (await verifyPromptSent(inputBox, String(text), 900) || wasComposerMutatedAfterSubmit(inputBox, String(text))) {
-                    log('[Prompt] Sent via Send button (verified)');
+                if (await waitForClear(3500)) {
+                    log('[Prompt] Sent via Send button (composer cleared)');
                     return true;
                 }
-            }
-
-            if (attemptedSubmit) {
-                log('[Prompt] WARN: Submit attempted but verification inconclusive; treating as sent');
-                return true;
             }
 
             log('[Prompt] ERROR: Prompt did not appear to send (composer not cleared)');
@@ -1641,34 +1324,49 @@
         return false;
     };
 
-    // --- Continue Button API ---
-    // Check if Continue button is present
-    window.__autoAcceptHasContinue = function () {
-        return findThinkingLimitContinueCandidate(document) !== null;
-    };
+    window.__autoAcceptSwitchModel = async function(fallbackModelPattern) {
+        log(`[Model] Attempting to switch model to match: ${fallbackModelPattern}`);
+        try {
+            // Find current model button
+            const btns = queryAll('button, div[role="button"], div[role="combobox"]');
+            const currentModelBtn = btns.find(b => {
+                const text = (b.textContent || '').trim().toLowerCase();
+                return isElementVisible(b) && (text.includes('claude') || text.includes('gpt-') || text.includes('gemini'));
+            });
 
-    // Set Continue button policy ('auto' | 'ask')
-    window.__autoAcceptSetContinuePolicy = function (policy) {
-        const state = window.__autoAcceptState;
-        if (state) {
-            state.continuePolicy = policy; // 'auto' | 'ask'
-            log(`[Continue] Policy set to: ${policy}`);
+            if (!currentModelBtn) {
+                log('[Model] Could not find current model selector button');
+                return false;
+            }
+
+            currentModelBtn.click();
+            log(`[Model] Clicked model selector: ${currentModelBtn.textContent.trim()}`);
+            
+            // Wait for dropdown to appear
+            await new Promise(r => setTimeout(r, 400));
+            
+            // Find the fallback model in the new elements
+            const dropdownItems = queryAll('div[role="option"], li, button, [role="menuitem"], .model-selector-item, [class*="item"]');
+            const targetItem = dropdownItems.find(item => {
+                const text = (item.textContent || '').trim().toLowerCase();
+                return isElementVisible(item) && text.includes(fallbackModelPattern.toLowerCase());
+            });
+
+            if (targetItem) {
+                targetItem.click();
+                log(`[Model] Switched to fallback model: ${targetItem.textContent.trim()}`);
+                await new Promise(r => setTimeout(r, 300));
+                return true;
+            } else {
+                log(`[Model] Fallback model '${fallbackModelPattern}' not found in dropdown`);
+                // Close dropdown by clicking the main button again
+                currentModelBtn.click();
+                return false;
+            }
+        } catch(e) {
+            log(`[Model] Error switching model: ${e}`);
+            return false;
         }
-    };
-
-    // Force click Continue button once
-    window.__autoAcceptForceClickContinueOnce = async function () {
-        return await clickContinueIfPresent(document);
-    };
-
-    // Get Continue button diagnostics
-    window.__autoAcceptGetContinueDiagnostics = function () {
-        return {
-            hasContinue: window.__autoAcceptHasContinue(),
-            hasThinkingLimitMessage: hasThinkingLimitMessage(document),
-            continuePolicy: window.__autoAcceptState?.continuePolicy || 'auto',
-            ts: Date.now()
-        };
     };
 
     log("Core Bundle Initialized.", true);
