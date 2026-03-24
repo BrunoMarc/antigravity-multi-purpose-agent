@@ -1333,9 +1333,13 @@
                 if (!isElementVisible(b)) return false;
                 const text = (b.textContent || '').trim().toLowerCase();
                 const hasModelName = text.includes('claude') || text.includes('gpt') || text.includes('gemini') || text.includes('o1') || text.includes('deepseek') || text.includes('llama');
+                
+                // The button should either explicitly contain a known model name
+                if (hasModelName) return true;
+                
+                // Or be a combobox with short text (model names are usually < 30 chars), EXCLUDING "always run" and "cancel"
                 const hasMenuPopup = b.getAttribute('aria-haspopup') === 'menu' || b.getAttribute('aria-haspopup') === 'listbox';
-                // The button should either explicitly contain a known model name, or be a combobox with short text (model names are usually < 30 chars)
-                return hasModelName || (hasMenuPopup && text.length > 2 && text.length < 40 && !text.includes('cancel') && !text.includes('stop'));
+                return hasMenuPopup && text.length > 2 && text.length < 40 && !text.includes('cancel') && !text.includes('stop') && !text.includes('always run');
             });
 
             if (!currentModelBtn) {
