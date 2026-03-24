@@ -560,9 +560,12 @@ class Scheduler {
                         if (this.isStopped || runId !== this.queueRunId) return;
                     }
 
-                    // CRITICAL FIX: If 0 prompts sent, we must abort, otherwise we wait for silence forever
+                                        // CRITICAL FIX: If 0 prompts sent, we must NOT abort the whole loop. We should pause and let the user open the chat, or keep trying.
                     if (sentCount === 0) {
-                        throw new Error('Prompt not delivered (no active chat input / send function found).');
+                        this.log('Scheduler: No chat input found. Pausing queue to wait for UI readiness.');
+                        vscode.window.showWarningMessage('Multi Purpose: Could not find chat input. Queue paused. Open chat and resume.');
+                        this.pauseQueue();
+                        return;
                     }
 
                     this.addToHistory(text, this.targetConversation);
