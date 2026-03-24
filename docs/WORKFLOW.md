@@ -47,11 +47,11 @@ The browser payload maintains a global state object `window.__autoAcceptState` (
 **Click loop**
 
 - Entry point: `window.__autoAcceptStart(config)`
-- Loop cadence: `config.pollInterval` (default 1000ms)
+- Loop cadence: `config.pollInterval` (default 60000ms)
 - Candidate scan: broad selectors like `button`, `[class*="button"]`, `[class*="anysphere"]`
 - Button eligibility:
   - Matches action keywords like `accept`, `run`, `retry`, `apply`, `execute`, `confirm`, `allow`
-  - Rejects keywords like `skip`, `reject`, `cancel`, `close`, `refine`
+  - Rejects keywords like `skip`, `reject`, `cancel`, `close`, `refine`, `always`
   - Must be visible, enabled, and have pointer-events enabled
 
 **Verification & stats**
@@ -77,7 +77,7 @@ Only one extension instance should actively drive CDP in a multi-window environm
 
 ---
 
-## 5. Scheduler & Prompt Queue
+## 5. Scheduler, Grace Period & Prompt Queue
 
 The Scheduler lives in the extension host and supports:
 
@@ -85,34 +85,26 @@ The Scheduler lives in the extension host and supports:
 - **Daily mode**: send a prompt at a fixed HH:MM
 - **Queue mode**: execute a list of prompts sequentially (optionally with “check prompts” interleaved)
 
-**Queue execution**
+**Queue execution & The 15s Grace Period**
 
 - Runtime queue is built from `auto-accept.schedule.prompts` (and optionally `checkPrompt.*`).
-- Queue progression uses a silence heuristic:
-  - Every 5 seconds, the Scheduler reads click stats from CDP (`cdpHandler.getStats()`).
-  - After the current queue item has been sent successfully and has been running for at least 10 seconds:
-    - If no activity occurs for `silenceTimeout` seconds, the Scheduler advances to the next queue item.
-- Queue behaviors:
-  - `consume`: remove prompts from config as they complete
-  - `loop`: loop back to the start after completion
-
-**Conversation targeting**
-
-- Sending prompts supports a “target conversation” value (empty = current active tab).
-- Selecting a specific conversation is implemented by the browser payload clicking a matching `button.grow` tab, then sending the prompt.
-- The “conversations list” exposed to the Settings UI is read from `window.__autoAcceptState.tabNames`. The payload contains utilities for tab-name normalization, but tab list population is currently not driven by the main click loop.
+- Queue progression uses a robust silence heuristic:
+  - Every 5 seconds, the Scheduler checks if the AI is busy via CDP (`window.__autoAcceptIsBusy`).
+  - **Grace Period:** When a prompt is first sent, the extension forces a mandatory 15-second grace period where it assumes the AI is busy, regardless of UI state. This prevents the queue from advancing prematurely before the AI has time to render "Running" status.
+  - **Busy Heuristics:** The script detects the active AI state by finding explicit "Stop Generating" buttons, or text labels containing "Running", "Generating", or "Thinking" that are located in the active composer area (bottom 500px of the screen), while ignoring the Extension's own Settings Panel.
+  - Only after the AI is no longer busy AND the `silenceTimeout` (default 120s) has passed, the Scheduler advances to the next queue item.
 
 ---
 
-## 6. Quota Awareness & Auto-Continue
+## 6. Quota Awareness & Model Fallback
 
 If Antigravity quota polling is enabled:
 
-- The extension periodically calls `AntigravityClient.getUserStatus()` and updates a quota status bar item.
-- The Scheduler is notified when any model is exhausted via `scheduler.setQuotaExhausted(true)`, which prevents queue advancement.
-- When quota transitions from exhausted → available, the Scheduler:
-  - Resends the current queue item (if queue is running and “resume queue” is enabled), or
-  - Sends `Continue` (if “auto-continue” is enabled and queue resume does not apply).
+- The extension periodically calls `AntigravityClient.getUserStatus()` and updates a quota status bar item (Uses `ss` parsing for robust Linux PID discovery).
+- When quota is exhausted, the extension checks for a **Fallback Model** (e.g. `Gemini 3 Flash` or `Gemini 3.1 Pro`).
+  - If a fallback model is configured, the CDP payload automatically opens the model selector, switches the model, and allows the Queue to continue seamlessly.
+  - If no fallback is configured, it calls `scheduler.setQuotaExhausted(true)`, pausing the queue.
+- When quota transitions from exhausted → available, the Scheduler resumes natively.
 
 ---
 
@@ -121,48 +113,25 @@ If Antigravity quota polling is enabled:
 **Settings WebView**
 
 - The Settings panel uses `postMessage` to call extension commands and update configuration.
-- It also displays queue status, prompt history, quota info, logs, and safety settings.
+- It also displays queue status, prompt history, quota info, logs, fallback model selector and safety settings.
 
 **Debug Server (optional)**
 
-- When debug mode is enabled, the extension can expose an HTTP debug server on `127.0.0.1:54321` for automated tests and live diagnostics (state snapshots, CDP evaluation, queue control, etc.).
-
-For API details and test harness usage, see [DEBUG_TESTING.md](./DEBUG_TESTING.md).
+- When debug mode is enabled, the extension can expose an HTTP debug server on `127.0.0.1:54321` for automated tests and live diagnostics.
 
 ---
 
-## 8. Development Protocol
+## 8. Development Protocol (The Fast Sync Workflow)
 
 ### Modifying browser logic
 
-The browser payload runs inside a live page context. A syntax error in the payload can silently break automation for the target until the extension host is reloaded and the payload is re-injected.
+The extension uses `esbuild` to compile everything. Since you are developing from a cloned repository (Fork), you can instantly push changes to your active Antigravity IDE without generating `.vsix` packages.
 
-Practical workflow:
+**Workflow:**
+1. Make changes to `main_scripts/full_cdp_script.js` or `main_scripts/extension-impl.js`.
+2. Run `npm run sync`. This script automatically compiles the extension and overwrites the active binary inside `~/.antigravity/extensions/rodhayl.multi-purpose-agent-1.0.1/`.
+3. Open the Antigravity Command Palette (`Ctrl+Shift+P`) and execute **Developer: Reload Window** to load your fresh changes.
 
-1. Use the live debug tooling to execute and iterate on DOM selectors and helper logic against a real Antigravity tab.
-2. Apply changes to [main_scripts/full_cdp_script.js](../main_scripts/full_cdp_script.js).
-3. Reload the VS Code extension host to re-inject the payload into targets.
+### Version Protection
 
-### Adding or changing settings
-
-Settings changes usually touch four layers:
-
-1. [package.json](../package.json) schema (`contributes.configuration`)
-2. [main_scripts/settings-panel.js](../main_scripts/settings-panel.js) UI + message handlers
-3. [main_scripts/extension-impl.js](../main_scripts/extension-impl.js) config reads/writes and behavior wiring
-4. [main_scripts/cdp-handler.js](../main_scripts/cdp-handler.js) when behavior affects browser payload config or evaluation
-
-### Relauncher safety
-
-The Relauncher modifies OS-level launch shortcuts to ensure Antigravity is started with `--remote-debugging-port=9004`. Treat changes to [main_scripts/relauncher.js](../main_scripts/relauncher.js) as high-impact and validate on each platform you touch.
-
----
-
-## 9. Antigravity-only Backlog Candidates
-
-The repository intentionally remains Antigravity-specific. The following are candidate enhancements derived from prior cross-repo research and should be implemented only with Antigravity naming and behavior:
-
-- Continue-banner auto-click support for interrupted long-running generations.
-- DOM mutation-assisted activity tracking to improve queue silence detection fidelity.
-- Expanded debug endpoint ergonomics (error codes/request IDs) while preserving current command surface.
-
+The `package.json` version is permanently hardcoded to `999.0.0` to prevent the IDE's automatic updater from downloading the vanilla version from the marketplace and destroying your custom autonomous loop heuristics.
