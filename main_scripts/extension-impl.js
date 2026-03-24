@@ -156,7 +156,22 @@ class Scheduler {
         this.log('Scheduler started.');
     }
 
-    stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } if (this.silenceTimer) { clearInterval(this.silenceTimer); this.silenceTimer = null; } this.isRunningQueue = false; this.isStopped = true; this.queueRunId++; this.conversationStatus = 'idle'; this.isPaused = false; this.promptQueue = Promise.resolve(); }
+    stop() {
+        if (this.timer) {
+            clearInterval(this.timer);
+            this.timer = null;
+        }
+        if (this.silenceTimer) {
+            clearInterval(this.silenceTimer);
+            this.silenceTimer = null;
+        }
+        this.isRunningQueue = false;
+        this.isStopped = true;
+        this.queueRunId++;
+        this.conversationStatus = 'idle';
+        this.isPaused = false;
+        this.promptQueue = Promise.resolve();
+    }
 
     loadConfig() {
         const cfg = vscode.workspace.getConfiguration('auto-accept.schedule');
