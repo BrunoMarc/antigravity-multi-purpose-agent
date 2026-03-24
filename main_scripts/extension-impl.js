@@ -542,28 +542,33 @@ class Scheduler {
             // Use CDP only - the verified working method
             if (this.cdpHandler) {
                 try {
-                    // Ensure CDP has scanned/injected latest chat surfaces before attempting to send.
-                    await this.ensureCdpReadyNow('queuePrompt');
-                    if (this.isStopped || runId !== this.queueRunId) return;
+                    let sentCount = 0;
+                    let retries = 0;
+                    const maxRetries = 15; // 15 retries * 10 seconds = 2.5 minutes of waiting
 
-                    const rawSentCount = await this.cdpHandler.sendPrompt(text, this.targetConversation);
-                    let sentCount = typeof rawSentCount === 'number' ? rawSentCount : (rawSentCount ? 1 : 0);
-                    if (this.isStopped || runId !== this.queueRunId) return;
+                    while (sentCount === 0 && retries < maxRetries) {
+                        if (this.isStopped || runId !== this.queueRunId) return;
 
-                    // One retry after a forced resync (chat webview can spawn after we started the queue)
-                    if (sentCount === 0 && this.ensureCdpReady) {
-                        this.log('Scheduler: Prompt not delivered, forcing CDP resync and retrying once...');
-                        await this.ensureCdpReadyNow('queuePrompt-retry', true);
+                        // Ensure CDP has scanned/injected latest chat surfaces before attempting to send.
+                        await this.ensureCdpReadyNow(retries === 0 ? 'queuePrompt' : `queuePrompt-retry-${retries}`, true);
                         if (this.isStopped || runId !== this.queueRunId) return;
-                        const rawRetry = await this.cdpHandler.sendPrompt(text, this.targetConversation);
-                        sentCount = typeof rawRetry === 'number' ? rawRetry : (rawRetry ? 1 : 0);
+
+                        const rawSentCount = await this.cdpHandler.sendPrompt(text, this.targetConversation);
+                        sentCount = typeof rawSentCount === 'number' ? rawSentCount : (rawSentCount ? 1 : 0);
                         if (this.isStopped || runId !== this.queueRunId) return;
+
+                        if (sentCount === 0) {
+                            retries++;
+                            if (retries < maxRetries) {
+                                this.log(`Scheduler: Prompt not delivered (Attempt ${retries}/${maxRetries}). Chat UI might be hidden or loading. Waiting 10s...`);
+                                await new Promise(r => setTimeout(r, 10000));
+                            }
+                        }
                     }
 
-                                        // CRITICAL FIX: If 0 prompts sent, we must NOT abort the whole loop. We should pause and let the user open the chat, or keep trying.
                     if (sentCount === 0) {
-                        this.log('Scheduler: No chat input found. Pausing queue to wait for UI readiness.');
-                        vscode.window.showWarningMessage('Multi Purpose: Could not find chat input. Queue paused. Open chat and resume.');
+                        this.log('Scheduler: Exhausted all retries. No chat input found. Pausing queue to wait for UI readiness.');
+                        vscode.window.showWarningMessage('Multi Purpose: Could not find chat input after 2.5 minutes. Queue paused. Open chat and resume.');
                         this.pauseQueue();
                         return;
                     }
@@ -577,8 +582,8 @@ class Scheduler {
                 } catch (err) {
                     this.log(`Scheduler: CDP failed: ${err.message}`);
                     vscode.window.showErrorMessage(`Queue Error: ${err.message}`);
-                    // Force stop queue on critical error to prevent "Running" ghost state
-                    this.stopQueue();
+                    // Force pause queue on critical error to allow recovery instead of destroying progress
+                    this.pauseQueue();
                     return;
                 }
             } else {
