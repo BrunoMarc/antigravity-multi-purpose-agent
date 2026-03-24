@@ -21,6 +21,7 @@
 	"scripts": {
 		"test": "node tests/scheduler.test.js",
 		"compile": "esbuild extension.js --bundle --outfile=dist/extension.js --external:vscode --platform=node --format=cjs",
+		"sync": "./scripts/sync-to-ide.sh",
 		"vscode:prepublish": "npm run compile",
 		"package": "npx vsce package"
 	},
