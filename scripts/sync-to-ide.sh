@@ -3,7 +3,7 @@
 set -e
 
 # O diretório oficial da extensão no seu computador
-TARGET_DIR="$HOME/.antigravity/extensions/rodhayl.multi-purpose-agent-999.0.0"
+TARGET_DIR="$HOME/.antigravity/extensions/rodhayl.multi-purpose-agent-1.0.1"
 
 if [ ! -d "$TARGET_DIR" ]; then
     echo "⚙️ Diretório da extensão não encontrado. Recriando estrutura em $TARGET_DIR..."
