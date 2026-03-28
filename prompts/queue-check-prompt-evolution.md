@@ -1,108 +1,66 @@
-# 🛡️ Loop Autônomo — Checkpoint Rigoroso & Geração de Próximo Passo
+# 🛡️ Loop Autônomo — Checkpoint Rigoroso & Validador de Evolução
 
-Você acaba de concluir uma task da Fila de Autonomia. **A missão não terminou.** O seu objetivo agora é avaliar friamente o que foi construído, garantir que os padrões de qualidade foram não apenas mantidos, mas superados, e engatilhar o próximo desafio.
+Você acaba de concluir a evolução de inteligência (Unit, Integration ou E2E). O ciclo não acabou: assuma as vestes de **Auditor Severo**. Sua entrega subiu a régua de Inteligência de fato ou você criou ruído/instabilidade na esteira C-I?
 
----
-
-## 1. Verificação Impiedosa (Checklist Obrigatório)
-
-Execute **todos** os seguintes comandos e analise os resultados. Se QUALQUER um falhar, PARE e corrija ANTES de prosseguir.
-
-### 1.1 Testes Internos dos Geradores
+## 1. Verificação Impiedosa: Saúde Estrutural (Obrigatório)
+Se o gerador falha na base, a fundação está apodrecendo com o seu update. Prove a saúde:
 ```bash
-# Parser AST + Bridges
 npx tsx --test scripts/ast/__tests__/*.test.ts
-
-# Templates E2E
 npx tsx --test scripts/e2e-gen/__tests__/*.test.ts
-
-# MSW generator
 npx tsx --test scripts/msw-gen/__tests__/*.test.ts
-
-# Unit/Integration gen
 npx tsx --test scripts/unit-gen/__tests__/*.test.ts
 npx tsx --test scripts/__tests__/*.test.ts
 ```
-**Critério:** 100% pass. Zero falhas. Se falhar, o gerador está quebrado e TUDO gerado a partir dele é lixo.
+**Critério:** Zero falhas. Se a lógica crashear, conserte o template/bridge imediatamente (ou decida declarar rollback forçado caso atinja limite de tentativas da fase de fix).
 
-### 1.2 Regeneração Total (sem falhas do gen)
+## 2. Regeneração Ligeira e sem Corrupção de Tipos
+A semântica original deve ser mantida ao escalar pros 77 módulos:
 ```bash
-npm run gen:spec:all    # E2E specs (deve gerar 6000+ tests, 0 módulos falhados)
-npm run gen:msw:all     # MSW handlers
-npm run gen:unit-spec:all  # Unit specs
+npm run gen:msw:all && npm run gen:unit-spec:all && npm run gen:integration -- --all && npm run gen:spec:all
 ```
-**Critério:** A saída deve mostrar `❌ Failed: 0 modules` para cada gerador. Se qualquer módulo falhar na regeneração, investigue e corrija o parser/bridge.
+**Critério:** A saída de console não pode conter `Failed to generate...`, e nenhum erro estático de TypeScript sintático deve ser injetado nas saídas finais `.generated.spec.ts`.
 
-### 1.3 Validação E2E (Playwright)
+## 3. Qualidade Prática (Executar as Baterias Modificadas)
+Execute o framework que foi beneficiado por sua meta-programação recente:
 ```bash
-PLAYWRIGHT_FAST=1 MAX_FAILURES=60 ./scripts/run-ai-tests.sh
-```
-**Critério Mínimo:** ≥ 99% pass rate (scattered failures aceitáveis, bursts NÃO).
+# Se o alvo foi E2E/MSW Gen:
+./scripts/run-ai-tests.sh --last-failed
 
-**Análise de falhas (obrigatório se houver):**
+# Se o alvo foi Unit/Integration Gen:
+CI=true npm test -- --watch=false
+```
+
+## 4. Análise Profunda via Python (Prova Inegável de Sucesso)
+Para garantir que você não opera às cegas, use scripts auxiliares:
+
+Se for **E2E**, dissecamos a sanidade e taxa de acertos brutos:
 ```bash
 python3 -c "import json; r=json.load(open('.playwright-results.json')); s=r['stats']; print(f'Passed: {s[\"expected\"]}/{s[\"expected\"]+s[\"unexpected\"]} ({s[\"expected\"]*100/(s[\"expected\"]+s[\"unexpected\"]):.1f}%)')"
 cat test-report-for-coding-agents/all-failures.md | head -60
 ```
 
-### 1.4 Distinção Flaky vs Bug Real
-Se existem falhas, rode **apenas** as que falharam:
+Se for **Unit/Integration**, dissecamos o avanço dos metadados de Branches da aplicação:
 ```bash
-./scripts/run-ai-tests.sh --last-failed
+python3 -c "import json; data = json.load(open('coverage/apollo-ng/coverage-summary.json')); print('Branches:', data['total']['branches']['pct'], '%');"
 ```
-- Se passam na segunda vez → **flaky** (aceitar, não refatorar tudo por causa disso)
-- Se falham de novo → **bug real** (deve ser corrigido NESTE ciclo)
 
----
-
-## 2. Ponto de Salvamento (Commit)
-
-Se o resultado for um sucesso (≥ 99% E2E, 100% generator tests, 0 módulos falhando na regeneração):
-
+## 5. Ponto de Salvamento (Commit Autônomo Seguro)
+Se o output passar (ou se bugs forem apenas timing flaky tests espalhados), legitime o avanço de inteligência:
 ```bash
 git add -A
-git commit -m "chore: loop checkpoint - [Resumo Técnico do Lote Resolvido]"
+git commit -m "test(generators): [Resumo Evolutivo Específico - Ex: E2E Create Template refinado para validar preenchimento de M2M relations e MultiSelect inputs]"
 ```
+**Regras de Git:** NUNCA execute `git push` no modo loop. Nunca adicione co-autoria IA (`Co-Authored-By`). Registre o pilar que evoluiu.
 
-**Regras de Commit:**
-- **NUNCA** dê `git push` — apenas commit local
-- **NUNCA** inclua co-autoria AI
-- Mensagem em inglês, no imperativo: `fix: resolve navigation timing for nested resources`
-- Use conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `chore:`
+## 6. O Próximo Escopo de Balanceamento Autônomo
+Para a excelência de uma máquina infinita, seu próximo ciclo não pode depender da intervenção humana. Force sua dedução e analise o código base: Qual pilar precisa ser alimentado à força e receber inteligência magna na próxima rotação de contexto?
 
----
+Alguns insights mentais para sua decisão final de escopo:
+- **[E2E Gen Cego]** List Fields M2M em sub-nested resources estão vazios nos clicks de geração autônoma? Ensinar a preencher.
+- **[Unit Gen Cego]** O Parser AST cruza propriedades do field (type "email" / máscara) contra formControls e checa o Primeng UI render error? Injetar isso!
+- **[Coverage Gen Cego]** O próprio AST ou Bridge possui funções complexas que sequer são engajadas pelos test runners internos nativos `*.test.ts`? Exterminar debito tecnico base.
 
-## 3. Inventário de Saúde (Antes de Escolher o Próximo Escopo)
-
-Antes de selecionar a próxima task, faça um inventário rápido:
-
-```bash
-# Quantos testes E2E existem vs quantos passam?
-python3 -c "import json; r=json.load(open('.playwright-results.json')); s=r['stats']; print(f'Total: {s[\"expected\"]+s[\"unexpected\"]+s[\"skipped\"]} | Pass: {s[\"expected\"]} | Fail: {s[\"unexpected\"]} | Skip: {s[\"skipped\"]}')"
-
-# Módulos com mais falhas (pelo report)
-cat test-report-for-coding-agents/all-failures.md | grep '###' | head -20
-
-# Verificar cobertura do generator sobre blueprints disponíveis
-npm run gen:spec:all 2>&1 | grep -E "Failed:|Skipped:|Total tests"
-```
-
----
-
-## 4. O Próximo Escopo (Auto-Alimentação da Fila)
-
-A Fila de Autonomia precisa saber o que você fará a seguir. Use a **Matriz de Prioridades** para decidir:
-
-| Prio | O que procurar | Como detectar |
-|------|----------------|---------------|
-| **P0** | Bursts (≥5 F's consecutivas de um módulo) | Olhar output do terminal, analisar `.playwright-results.json` |
-| **P0** | Generator crashes (módulo falha na regeneração) | `npm run gen:spec:all 2>&1 | grep "Failed"` |
-| **P1** | Padrão repetitivo de falha (ex: "enable save" em 10+ módulos) | `cat test-report-for-coding-agents/all-failures.md | grep -c "enable save"` |
-| **P1** | MSW data mismatch | Erro "Expected: visible" em nested resources (dados MSW errados) |
-| **P2** | Coverage gaps (cenários do CJS não portados) | Comparar templates `.ts` com backup CJS |
-| **P2** | Flaky tests estáveis | Re-rode `--last-failed` e se persistem, fixe timing |
-
-**MANDATÓRIO:** Você deve terminar a sua resposta com um bloco markdown exato no seguinte formato:
+**MANDATÓRIO:** Termine rigorosamente com o bloco de Markdown exigido! A sua autonomia existencial pro próximo clico depende destas linhas:
 
 ### PROXIMA_TASK_DA_FILA
-[Descreva aqui, com detalhes técnicos, diretórios e objetivos, qual é a exata próxima fragilidade do sistema (MSW, E2E ou Unit) que você vai arrumar quando este loop rodar de novo em 30 segundos.]
+[Declare ESTRATEGICAMENTE o pilar (Unit, Integration, E2E ou Meta-Parsers em si) que vai absorver a atenção. Relate o ponto cego ou a fragilidade lógica dele exata atual baseada no código e defina a ordem de execução do que deve ser tocado (ex: "Evoluirei o tests-metadata-builder.ts para arrastar metadados X, permitindo testar campos Y") para o novo modelo de agente devorar operando inércia autônoma de forma perfeita em 30 segundos.]

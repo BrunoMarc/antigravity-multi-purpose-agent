@@ -2,12 +2,12 @@
 # Script para copiar as mudanças do projeto atual direto para o Antigravity sem precisar empacotar
 set -e
 
-# O diretório oficial da extensão no seu computador (encontra a versão instalada mais recente)
-TARGET_DIR=$(ls -d ~/.antigravity/extensions/rodhayl.multi-purpose-agent-* | head -n 1)
+# O diretório oficial da extensão no seu computador
+TARGET_DIR="$HOME/.antigravity/extensions/rodhayl.multi-purpose-agent-999.0.0"
 
-if [ -z "$TARGET_DIR" ]; then
-    echo "❌ Erro: Não foi possível encontrar a extensão instalada no Antigravity."
-    exit 1
+if [ ! -d "$TARGET_DIR" ]; then
+    echo "⚙️ Diretório da extensão não encontrado. Recriando estrutura em $TARGET_DIR..."
+    mkdir -p "$TARGET_DIR/dist"
 fi
 
 echo "⚡ Compilando a extensão local..."
