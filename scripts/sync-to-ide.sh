@@ -14,9 +14,11 @@ echo "⚡ Compilando a extensão local..."
 npm run compile
 
 echo "📂 Copiando arquivos para $TARGET_DIR..."
-cp -r main_scripts/ $TARGET_DIR/
-cp package.json $TARGET_DIR/
-cp dist/extension.js $TARGET_DIR/dist/
+cp -r main_scripts/ "$TARGET_DIR/"
+cp -r media/ "$TARGET_DIR/"
+cp package.json "$TARGET_DIR/"
+cp dist/extension.js "$TARGET_DIR/dist/"
+cp README.md CHANGELOG.md LICENSE.md "$TARGET_DIR/" 2>/dev/null || true
 
 echo "✅ Sincronização concluída com sucesso!"
 echo "🔄 Lembre-se de rodar 'Developer: Reload Window' no seu Antigravity para aplicar as mudanças."
